@@ -7,7 +7,7 @@
 
 #define SpecularityReflectionPower 2.0            //[1.0 1.2 1.5 1.75 2.0 2.25 2.5 2.75 3.0]
 
-#define Enabled_SSAO
+//#define Enabled_SSAO
     #define SSAO_Scale 0.5  //[0.5 0.70710677 1.0]
 
 const int   noiseTextureResolution  = 64;
@@ -260,4 +260,4 @@ void main() {
   gl_FragData[2] = vec4(color, 1.0);
   gl_FragData[3] = vec4(0.0);
 }
-                                                                                           
+

@@ -51,6 +51,10 @@ vec3 L2rgb(in vec3 color){
   return pow(color, vec3(1.0 / 2.2));
 }
 
+float pow2(in float x){
+  return x * x;
+}
+
 float pow5(in float x){
   return x * x * x * x * x;
 }

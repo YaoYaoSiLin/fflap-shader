@@ -27,10 +27,12 @@ vec4 raytrace(in vec3 viewVector, in vec3 rayDirection, in vec3 normal, in float
 
   vec4 color = vec4(0.0);
 
-  vec3 testPoint = viewVector + normal * (pow5(1.0 - clamp01(-dot(normalize(viewVector), normal)))) * far * 0.0625 * 0.5 * 0.05;
+  float f = pow5(1.0 - clamp01(-dot(normalize(viewVector), normal))) * max(256.0, far) * 0.0625 * 0.5;
+
+  vec3 testPoint = viewVector + normal * f * 0.05;
 
   //rayDirection *= max(0.05, (length(viewVector)) / (256.0 * 256.0) * 2049.0);
-  rayDirection *= 0.4 + (pow5(1.0 - clamp01(-dot(normalize(viewVector), normal)))) * far * 0.0625 * 0.5;//dot(normalize(viewVector), normal)
+  rayDirection *= 0.4 + f;//dot(normalize(viewVector), normal)
   //rayDirection *= 1.0 + length(normal);
 
   int sr = 0;
@@ -65,10 +67,10 @@ vec4 raytrace(in vec3 viewVector, in vec3 rayDirection, in vec3 normal, in float
                  //n.xy *= pow(roughness, 0.5);
                  n.xy *= d;
 
-            colorIndex += texture2D(reflectionSampler, uv + n.xy * 0.003);
+            colorIndex += texture2D(reflectionSampler, uv + n.xy * 0.01);
 
             #ifdef skyReflectionSampler
-            vec3 skyReflection = texture2D(skyReflectionSampler, uv + n.xy * 0.003).rgb;
+            vec3 skyReflection = texture2D(skyReflectionSampler, uv + n.xy * 0.01).rgb;
             colorIndex.rgb += skyReflection.rgb;
             #endif
           }
@@ -101,9 +103,9 @@ vec4 raytrace(in vec3 viewVector, in vec3 rayDirection, in vec3 normal, in float
       }
 
       testPoint -= rayDirection;
-      rayDirection *= 0.047;
+      rayDirection *= 0.04;
     }else{
-      rayDirection *= 1.0 + (20.0 / float(SSR_Steps)) * 0.25 * float(maxf) + 0.03 * float(maxf) / 4.0;
+      rayDirection *= 1.0 + (20.0 / float(SSR_Steps)) * 0.25 * float(maxf);// + 0.03 * float(maxf) / 4.0;
       //0 + (16.0 / float(SSR_Steps)) * maxf * 0.13 + (float(SSR_Steps) * 0.001 * maxf)
     }
   }

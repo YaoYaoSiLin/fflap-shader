@@ -1,7 +1,7 @@
 #version 130
 
-#define POM_Depth 1.0    //[0.2 0.4 0.6 0.8 1.0 1.2 1.4 1.6 1.8 2.0 2.2 2.4 2.6 2.8 3.0]  R3D POM(AddictioN974) about 1.2,
-#define POM_Steps 8      //[8 12 16 20 24 28 32]
+#define POM_Depth 1.4         //[0.6 0.7 0.8 0.9 1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 1.8 1.9 2.0 2.1 2.2 2.9 2.4 2.5 2.6 2.7 2.8 2.9 3.0]
+#define POM_Steps 8           //[8 12 16 20 24 28 32]
 
 #define tileResolution 128    //[4 8 16 32 64 128 256 512 1024 2048 4096 8192]
 
@@ -92,7 +92,7 @@ vec2 ParallaxMapping(in vec2 coord, in vec3 vP, in float distance){
 
   float d = clamp((-distance + 32.0 - 2.0) / 8.0, 0.0, 1.0);
 
-  if(texture2D(normals, coord).a < 1.0 && distance < 32.0){
+  if(texture2D(normals, coord).a < 1.0 && distance < 32.0 && texture2D(texture, coord).a > 0.01){
     vec2 dt = vP.xy / abs(vP.z) / steps;
          dt *= d * 0.001 * (POM_Depth * POM_Depth);
 

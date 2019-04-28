@@ -155,7 +155,7 @@ void main() {
 
   vec2 lightMap = texture2D(colortex1, texcoord).xy;
   float torchLightMap = clamp01(pow(1.0 / (lightMap.x / (lightMap.x + 0.012)) * lightMap.x, 2.0) * 1.003 - 0.003);
-  float skyLightMap = max(pow(lightMap.y, 1.5) * 1.001 - 0.001, 0.0);
+  float skyLightMap = max(pow2(lightMap.y) * 1.004 - 0.004, 0.0);
 
   bool isSky = int(texture2D(colortex1, texcoord).z * 255.0) == 255;
 
@@ -209,7 +209,7 @@ void main() {
     #endif
 
     vec4 sunDirctLighting = CalculateShading(shadowtex1, wP);
-    shading = mix(shading, sunDirctLighting.rgb, sunDirctLighting.a) * texture2D(colortex2, texcoord).z;
+    shading = mix(vec3(clamp01((pow5(skyLightMap) - 0.5) * 20.0)), sunDirctLighting.rgb, sunDirctLighting.a) * texture2D(colortex2, texcoord).z;
 
     //vec3 sunLighting = albedo.rgb * sunLightingColorRaw * pow(fading, 5.0) * shading * clamp01(dot(normalize(shadowLightPosition), normal));
 
@@ -218,14 +218,15 @@ void main() {
          skyLighting += albedo.rgb * abs(dot(normalize(reflect(mat3(gbufferModelView) * vec3(1.0, 0.0, 0.0), normalize(upPosition))), normal)) * 0.48 * ao;
          skyLighting += albedo.rgb * abs(dot(normalize(reflect(mat3(gbufferModelView) * vec3(0.0, 0.0, 1.0), normalize(upPosition))), normal)) * 0.48 * ao;
          skyLighting += albedo.rgb * abs(dot(normalize(reflect(mat3(gbufferModelView) * vec3(0.0, 1.0, 0.0), normalize(upPosition))), normal)) * 0.21 * ao;
+         skyLighting *= skyLightMap * skyLightingColorRaw;
 
-    vec3 fakeGI = albedo.rgb * clamp01(dot(normalize(reflect(normalize(shadowLightPosition), normalize(upPosition))), normal)) * 0.311
-                + albedo.rgb * clamp01(dot(reflect(normalize(shadowLightPosition), mat3(gbufferModelView) * vec3(0.0, 0.0, -1.0)), normal)) * 0.216
-                + albedo.rgb * clamp01(dot(-normalize(shadowLightPosition), normal)) * 0.216;
+    vec3 fakeGI  = albedo.rgb * clamp01(dot(normalize(reflect(normalize(shadowLightPosition), normalize(upPosition))), normal)) * 0.557;
+         fakeGI += albedo.rgb * clamp01(dot(reflect(normalize(shadowLightPosition), mat3(gbufferModelView) * vec3(0.0, 0.0, -1.0)), normal)) * 0.216;
+         fakeGI += albedo.rgb * clamp01(dot(normalize(vP.xyz - shadowLightPosition), normal)) * 0.216;
          fakeGI *= (skyLightingColorRaw + sunLightingColorRaw * pow(fading * clamp01(dot(sP, vec3(0.0, 1.0, 0.0))), 3.0)) * skyLightMap * skyLightMap * ao;
 
-    color += skyLighting * skyLightMap * skyLightingColorRaw;
-    color += fakeGI;
+    color += skyLighting;
+    color += fakeGI * 0.746;
 
     vec3 h = normalize(nrP - nvP);
 
@@ -254,10 +255,12 @@ void main() {
 
   color = L2rgb(color);
 
+  float rarticelsDepth = 1.0;
+
 /* DRAWBUFFERS:0156 */
   gl_FragData[0] = vec4(L2rgb(albedo.rgb), 0.0);
   gl_FragData[1] = vec4(torchLightMap, skyLightMap, texture2D(colortex1, texcoord).za);
-  gl_FragData[2] = vec4(color, 1.0);
-  gl_FragData[3] = vec4(0.0);
+  gl_FragData[2] = vec4(color, rarticelsDepth);
+  gl_FragData[3] = vec4(color + skySpecularReflection.rgb, 0.0);
 }
-
+                                                                                           

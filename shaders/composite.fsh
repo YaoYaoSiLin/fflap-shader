@@ -6,6 +6,8 @@ uniform sampler2D gcolor;
 uniform sampler2D gnormal;
 uniform sampler2D composite;
 uniform sampler2D gaux2;
+uniform sampler2D gaux3;
+
 uniform sampler2D depthtex0;
 
 uniform mat4 gbufferModelViewInverse;
@@ -54,7 +56,7 @@ float maxComponent(in vec3 a) {
 
 void main(){
   vec4 albedo = texture2D(gcolor, texcoord);
-  bool isTranslucentBlocks = albedo.a > 0.9;
+  bool isTranslucentBlocks = albedo.a > 0.99;
 
   vec3 normal = normalDecode(texture2D(gnormal, texcoord).xy);
   float alpha = texture2D(gnormal, texcoord).z;
@@ -86,6 +88,7 @@ void main(){
 
   //albedo.rgb = rgb2L(albedo.rgb);
 
+  //Side A
   if(albedo.a > 0.99){
     vec3 skySpecularReflection = L2rgb(CalculateSky(normalize(rP), sP, cameraPosition.y, 0.5));
 
@@ -128,10 +131,11 @@ void main(){
         //color.rgb = RemovalColor(texture2D(gaux2, texcoord).rgb, color.rgb, color.a);
 
         color.rgb = RemovalColor(color.rgb, tranBlockWithSpecular, color.a);
-        color.rgb = mix(color.rgb, vec3(0.0), clamp01((color.a * 1.0 - 0.92) * 12.5));
+        //if(alpha > 0.9) color.rgb = texture2D(gaux3, texcoord).rgb;
+        //color.rgb = mix(clamp01(color.rgb), texture2D(gaux3, texcoord).rgb, float(floor(color.r) != 0.0 || floor(color.g) != 0.0 || floor(color.b) != 0.0));
 
         //color.rgb = RemovalColor(color.rgb, skySpecularReflection, dot(f, vec3(0.3333)) * specularity);
-        //solidBlockColor = mix(solidBlockColor, vec3(0.0), clamp01((color.a * 1.0 - 0.92) * 12.5));
+        solidBlockColor = mix(solidBlockColor, vec3(0.0), clamp01((color.a * 1.0 - 0.92) * 12.5));
         //color.rgb = clamp01(color.rgb);
 
         //color.rgb = RemovalColor(color.rgb, solidBlockColor, 1.0 - color.a);
@@ -145,10 +149,13 @@ void main(){
     //color.rgb = color.aaa * 0.1;
   }
 
+  //color.rgb = mix(color.rgb, texture2D(gaux3, texcoord).rgb, clamp01((alpha * 1.0 - 0.92) * 12.5));
+  //color.rgb = mix(texture2D(gaux3, texcoord).rgb, color.rgb, clamp01((color.a * 1.0 - 0.92) * 12.5));
   color.rgb = mix(color.rgb, color.rgb * 0.5 + 0.5, albedo.a * albedo.a);
 
   //color = L2rgb(color);
 
-/* DRAWBUFFERS:5 */
-  gl_FragData[0] = color;
+/* DRAWBUFFERS:05 */
+  gl_FragData[0] = albedo;
+  gl_FragData[1] = color;
 }

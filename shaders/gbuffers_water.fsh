@@ -125,16 +125,24 @@ void main() {
   vec3 halfVector = vP - solidVector;
 
   if(isWater) {
-    albedo = vec4(vec3(0.02), 0.178);
+    albedo = vec4(vec3(0.02), 0.01);
     r = 1.333;
-    albedo.rgb = mix(biomesColor.rgb * 0.24, albedo.rgb, pow5(dot(biomesColor.rgb, vec3(1.0)) * 0.3333));
+    albedo.rgb = mix(biomesColor.rgb, albedo.rgb, pow5(dot(biomesColor.rgb, vec3(1.0)) * 0.3333));
     //albedo.rgb += mix(biomesColor.rgb, albedo.rgb, abs(biomesColor.rgb - 1.0) * biomesColor.a);
     //albedo.a = 1.0 - (clamp01(1.0 + biomesColor.b - (biomesColor.r * 0.621 + biomesColor.g * 0.379) * 0.48));
     //albedo.a = max(albedo.a, pow(clamp01(max(biomesColor.r - biomesColor.g, biomesColor.g - biomesColor.r)), 1.0));
-    albedo.a = max(albedo.a, pow(max(0.0, biomesColor.r - biomesColor.g) + max(0.0, biomesColor.g - biomesColor.r), 0.5));
+    //albedo.a = max(albedo.a, pow((max(0.0, albedo.r - albedo.g) + max(0.0, albedo.g - albedo.r)), 0.5) * clamp01((1.0 - albedo.b) * 5.0));
+    albedo.a = max(albedo.a, (max(0.0, albedo.r - albedo.g) + max(0.0, albedo.g - albedo.r)) * max((1.0 - biomesColor.b), albedo.a) * 2.0);
+    albedo.rgb += (vec3(64.0, 86.0, 26.0) / 255.0 * 0.06 + skyLightingColorRaw * 0.62 * pow5(getLum(biomesColor.rgb))) * 16.0 * biomesColor.rgb;
+    albedo.a = pow(albedo.a, 0.33);
+    //albedo.a = mix(0.06, albedo.a, abs(dot(normalize(upPosition), normal)));
+    //albedo.a = clamp01(albedo.a * max(albedo.a, 1.0 - biomesColor.b));
+    //albedo.a = max(albedo.a, min(1.0, (max(0.0, albedo.r - albedo.g) + max(0.0, albedo.g - albedo.r)) * 4.0));
+    albedo.rgb *= 0.24;
     //albedo.a = 1.0;
     //smoothness = clamp01(1.0 - (albedo.a - 0.08) * 0.17) * 0.9976;
-    smoothness = 0.9998 - albedo.a * albedo.a * 0.02;
+    smoothness = 0.9998 - pow5(albedo.a) * 1.0;
+    metallic = 0.0;
   }
 
   if(isGlass){
@@ -155,8 +163,9 @@ void main() {
   }
 
   float alpha = albedo.a;
-  if(alpha > 0.98) alpha = 1.0 - clamp01((alpha - 0.0199) * 50.0);
-  else if(isEyeInWater == 0) alpha = 1.0 - pow5(clamp01(exp(-min(1.0 + float(isWater) * far * 0.5, length(halfVector)) * (albedo.a * albedo.a))));
+  //if(alpha > 0.98 && !isWater) alpha = 1.0 - clamp01((alpha - 0.0199) * 50.0);
+  //else
+  if(isEyeInWater == 0) alpha = 1.0 - pow5(clamp01(exp(-min(1.0 + float(isWater) * far * 0.5, length(halfVector)) * (albedo.a * albedo.a))));
 
   if(normalMap.x + normalMap.y <= 0.0) normalMap = vec3(0.5, 0.5, 1.0);
   normalMap = normalMap * 2.0 - 1.0;
@@ -174,6 +183,7 @@ void main() {
        F0 = mix(F0, albedo.rgb, step(0.5, metallic));
 
   vec3 color = albedo.rgb;
+  //if(isWater) color.rgb += pow5(getLum(biomesColor.rgb)) * vec3(64.0, 86.0, 26.0) / 255.0 * 0.16 + vec3(0.0, 0.0, skyLightingColorRaw.b) * 0.54;
        color = rgb2L(color);
 
   if(isWater){
@@ -219,6 +229,8 @@ void main() {
   color = mix(color, skySpecularReflection, (f * specularity));
   alpha = max(alpha, mix(alpha, specularity, dot(f, vec3(1.0)) / 3.0));
 
+  if(albedo.a > 0.95) alpha = 0.0;
+
   //if(isWater) alpha = length(nvec3(gbufferProjectionInverse * nvec4(vec3(gl_FragCoord.xy * pixel, texture(depthtex1, gl_FragCoord.xy * pixel).x) * 2.0 - 1.0)));
   //if(isWater) alpha = 1.0 - clamp01(length(vP - nvec3(gbufferProjectionInverse * nvec4(vec3(gl_FragCoord.xy * pixel, texture2D(depthtex1, gl_FragCoord.xy * pixel).x) * 2.0 - 1.0))) * 0.2);
   //vec3 halfVector = vP - nvec3(gbufferProjectionInverse * nvec4(vec3(gl_FragCoord.xy * pixel, texture2D(depthtex1, gl_FragCoord.xy * pixel).x) * 2.0 - 1.0));
@@ -232,5 +244,5 @@ void main() {
   gl_FragData[2] = vec4(normalEncode(normalMap), albedo.a, 1.0);
   gl_FragData[3] = vec4(smoothness, metallic, r - 1.0, 1.0);
   gl_FragData[4] = vec4(color, alpha);
-  //gl_FragData[3] = vec4(color, alpha);
+  //gl_FragData[5] = vec4(color, 1.0 - alpha);
 }

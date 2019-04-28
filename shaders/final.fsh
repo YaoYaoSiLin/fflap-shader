@@ -146,9 +146,9 @@ vec3 Uncharted2Tonemap(in vec3 color, in float x) {
 	float A = 2.51;
 	float B = 0.59;
 	float C = 0.01;
-	float D = 0.14;
-	float E = 0.0001;
-	float F = 0.15;
+	float D = 0.17;
+	float E = 0.0002;
+	float F = 0.08;
 
 	//color = L2rgb(color);
 

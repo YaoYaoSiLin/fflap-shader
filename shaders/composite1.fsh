@@ -121,54 +121,65 @@ void main(){
     float tranBlockR = texture2D(gcolor, rcoord).a;
     vec4 solidBlockSpecular = texture2D(gaux3, rcoord);
 
-    //color.rgb = mix(color2.rgb, color.rgb, clamp01(color2.a * 1.95 - 0.95));
+    //color.rgb = mix(color2.rgb, color.rgb, clamp01(color.a * 1.95 - 0.95));
     color.rgb = color2.rgb;
     color.rgb = mix(color.rgb, color.rgb * 2.0 - 1.0, tranBlockR * tranBlockR);
     //color.rgb += solidBlockSpecular.rgb;
 
-    vec3 transBlockAlbedo = rgb2L(albedo.rgb);
+    vec3 transBlockAlbedo = albedo.rgb;
+    //if(isWater) transBlockAlbedo += vec3(64.0, 86.0, 26.0) / 255.0 * 0.16 + vec3(0.0, 0.0, skyLightingColorRaw.b) * 0.54;
+         transBlockAlbedo = rgb2L(transBlockAlbedo * (1.0 - metallic * alpha));
 
     vec4 sunDirctLighting = CalculateShading(shadowtex0, wP);
     vec3 shading = mix(vec3(1.0), sunDirctLighting.rgb, sunDirctLighting.a);
 
+    vec3 sunLighting = BRDF(transBlockAlbedo * alpha, normalize(shadowLightPosition), -nvP, normal,  roughness, metallic, F0) * shading * sunLightingColorRaw * pow(fading, 5.0) * 4.0;
+
     vec3 transBlockColor = transBlockAlbedo * skyLightingColorRaw;
-         transBlockColor *= 1.0 - metallic;
-         //transBlockColor += BRDF(transBlockAlbedo, normalize(shadowLightPosition), -nvP, normal,  roughness, metallic, F0) * shading * sunLightingColorRaw * pow(fading, 5.0) * 4.0;
+         //transBlockColor += sunLighting;
 
     transBlockColor = L2rgb(transBlockColor);
+    transBlockColor *= 1.0 - metallic;
 
-    vec3 halfVector = nvec3(gbufferProjectionInverse * nvec4(vec3(rcoord, texture2D(depthtex0, rcoord).x) * 2.0 - 1.0)) - nvec3(gbufferProjectionInverse * nvec4(vec3(rcoord, texture2D(depthtex1, rcoord).x) * 2.0 - 1.0));
-    // = clamp01(1.0 - exp(-length(halfVector) * alpha)) * pow5(clamp01(dot(normalize(vP), normalize(vP + refract(normalize(vP), normalMap, 1.000293 / r)))));
-
-    if(length(refractP) < 0.99) color.rgb = albedo.rgb;
+    vec3 halfVector  = vP.xyz - nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, texture2D(depthtex1, rcoord).x) * 2.0 - 1.0));
+    vec3 halfVectorR = nvec3(gbufferProjectionInverse * nvec4(vec3(rcoord, texture2D(depthtex0, rcoord).x) * 2.0 - 1.0)) - nvec3(gbufferProjectionInverse * nvec4(vec3(rcoord, texture2D(depthtex1, rcoord).x) * 2.0 - 1.0));
 
     vec3 absorption = mix(color.rgb, color.rgb * albedo.rgb, alpha * (1.0 - albedo.rgb));
 
-    vec3 scattering = L2rgb(transBlockAlbedo * skyLightingColorRaw);
-         scattering *= 1.0 - metallic;
-         scattering = L2rgb(rgb2L(scattering) + BRDF(transBlockAlbedo, normalize(shadowLightPosition), -nvP, normal, roughness, metallic, F0) * shading * sunLightingColorRaw * pow(fading, 5.0) * 4.0);
+    vec3 scattering = transBlockAlbedo * skyLightingColorRaw;
+         //scattering += sunLighting;
+         scattering = L2rgb(scattering);
 
     vec3 absorptionFactor = 1.0 - albedo.rgb;
-    float scatteringFactor = 1.0 - pow5(clamp01(exp(-min(1.0 + far * 0.5 * float(isWater), length(halfVector)) * (alpha * alpha))));
-    if(isEyeInWater > 0) scatteringFactor = 0.0;
+
+    float scatteringFactor = max(length(halfVectorR), length(halfVector));
+    if(isEyeInWater == 1) scatteringFactor = length(vP.xyz);
+    scatteringFactor = 1.0 - pow5(clamp01(exp(-min(1.0 + float(isWater) * far * 0.5, scatteringFactor) * (alpha * alpha))));
+    scatteringFactor = max(scatteringFactor, 1.0 - clamp01(length(refractP)));
+    //if(isEyeInWater > 0) scatteringFactor = 0.0;
 
     vec3 solidBlockColor = color.rgb;
 
+    //color.rgb = mix(albedo.rgb, color.rgb, clamp01(length(refractP)));
+
     color.rgb = mix(absorption, scattering, scatteringFactor);
     //color.rgb = mix(color.rgb, transBlockColor, alpha);
-    color.rgb *= clamp01(1.0 - f * specularity);
+    color.rgb *= (1.0 - f * specularity);
     color.rgb = rgb2L(color.rgb);
-    color.rgb += BRDF(transBlockAlbedo, normalize(shadowLightPosition), -nvP, normal, roughness, metallic, F0) * shading * sunLightingColorRaw * pow(fading, 5.0) * 4.0;
+    color.rgb += sunLighting;
     color.rgb = L2rgb(color.rgb);
 
     //color.rgb = shading;
 
     //color.rgb = vec3(min(alpha, color.a));
+    //color.rgb = skyColor;
   }
 
   //color.rgb = texture2D(gaux3, texcoord).rgb;
 
   //color = L2rgb(color);
+
+  //color.rgb = texture2D(gaux3, texcoord).rgb;
 
 /* DRAWBUFFERS:5 */
   gl_FragData[0] = vec4(color.rgb, float(!isSky) + albedo.a);

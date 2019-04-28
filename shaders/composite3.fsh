@@ -5,6 +5,8 @@
 
 #define SHADOW_MAP_BIAS 0.9
 
+#define Enabled_TAA
+
 #define SpecularityReflectionPower 2.0            //[1.0 1.2 1.5 1.75 2.0 2.25 2.5 2.75 3.0]
 #define Continuum2_Texture_Format
 
@@ -108,16 +110,20 @@ void main() {
   vec4 vP = gbufferProjectionInverse * nvec4(vec3(texcoord, depth) * 2.0 - 1.0);
        vP /= vP.w;
   vec4 wP = gbufferModelViewInverse * vP;
-  vec3 nvP = normalize(vP.xyz);
-  vec3 rP = reflect(normalize(vP.xyz), normal);
-  vec3 nrP = normalize(reflect(normalize(vP.xyz), normal));
-  //vec3 refractP = refract(nvP, normal, IOR);
-
-  vec3 sP = mat3(gbufferModelViewInverse) * normalize(sunPosition);
 
   vec2 uvJittering = texcoord + haltonSequence_2n3[int(mod(frameCounter, 16))] * pixel;
   vec4 vPJittering = gbufferProjectionInverse * nvec4(vec3(uvJittering, texture2D(depthtex0, uvJittering)) * 2.0 - 1.0); vPJittering /= vPJittering.w;
   vec4 wPJittering = gbufferModelViewInverse * vPJittering;
+
+  #ifdef Enabled_TAA
+  vP = vPJittering;
+  #endif
+  vec3 nvP = normalize(vP.xyz);
+  vec3 rP = reflect(nvP, normal);
+  vec3 nrP = normalize(rP);
+  //vec3 refractP = refract(nvP, normal, IOR);
+
+  vec3 sP = mat3(gbufferModelViewInverse) * normalize(sunPosition);
 
   //if(length(vP.xyz) < 100.0 || metallic > 0.5 || isTranslucentBlocks){
   if(!isSky){
@@ -139,15 +145,15 @@ void main() {
     float dither = bayer_32x32(texcoord, resolution);
     dither *= 1.0;
 
-    float r = clamp01(max(f.b, max(f.r, f.g)) * g * d);
-          r = 1.0 - clamp01(r / (0.05 + 4.0 * abs(dot(normal, -nvP)) * abs(dot(normal, nrP))));
+    float r = clamp01(max(f.b, max(f.r, f.g)) * d);
+          r = 1.0 - clamp01(r / (1.0 + 4.0 * abs(dot(normal, -nvP)) * abs(dot(normal, nrP))) * 5.0);
 
     vec3 skySpecularReflection = L2rgb(CalculateSky(nrP, sP, cameraPosition.y, 0.5));
          //skySpecularReflection = L2rgb(mix(skySpecularReflection, skyLightingColorRaw + sunLightingColorRaw * 0.1, r));
 
     vec4 ssR = vec4(0.0);
     //if((!isPlants && length(vP.xyz) < 100.0) || isTranslucentBlocks){
-      ssR = raytrace(vP.xyz, rP.xyz, normal, dither * 0.01, r);
+      ssR = raytrace(vP.xyz, rP, normal, dither * 0.01, r);
       //ssR.rgb = rgb2L(ssR.rgb);
     //  if(!isTranslucentBlocks) ssR.a *= clamp01((-length(vP.xyz) + 100.0 - 16.0) / 32.0);
     //}
@@ -157,7 +163,7 @@ void main() {
     //color = vec3(0.0);
     //color = mix(color, specularReflection, f * specularity);
     color += specularReflection * f * specularity;
-    //color = ssR.rgb * ssR.a;
+    //color = ssR.rgb;
     //color = vec3(clamp01(-dot((nvP), normal)));
   }
 

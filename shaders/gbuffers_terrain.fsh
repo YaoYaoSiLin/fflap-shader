@@ -1,11 +1,28 @@
 #version 130
 
-#define POM_Depth 1.4         //[0.6 0.7 0.8 0.9 1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 1.8 1.9 2.0 2.1 2.2 2.9 2.4 2.5 2.6 2.7 2.8 2.9 3.0]
+#extension GL_ARB_shader_texture_lod : require
+
+#define Only_Normal_Alpha   0 //
+#define Only_Texture_Alpha  1 //
+#define Only_Normal_Blue    2 //
+
+#define Texture_Alpha_first 0 //
+#define Normal_Alpha_First  1 //
+#define Normal_Blue_First   2 //
+
+#define POM_Mode
+#define POM_Depth 1.4         //[0.6 0.7 0.8 0.9 1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 1.8 1.9 2.0 2.1 2.2 2.3 2.4 2.5 2.6 2.7 2.8 2.9 3.0]
 #define POM_Steps 8           //[8 12 16 20 24 28 32]
 
-#define tileResolution 128    //[4 8 16 32 64 128 256 512 1024 2048 4096 8192]
+#define tileResolution 128      //[0 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192]
+#define POM_Self_Shadow_Fix 1.0 //[0.25 0.5 1.0 2.0 4.0]
 
 #define Continuum2_Texture_Format
+
+#if tileResolution == 0
+#undef tileResolution
+#define tileResolution sqrt(textureSize(normals, 0).x) * 2.0
+#endif
 
 const int noiseTextureResolution = 64;
 
@@ -25,6 +42,7 @@ uniform vec3 shadowLightPosition;
 
 uniform mat4 gbufferModelViewInverse;
 uniform mat4 gbufferModelView;
+uniform mat4 gbufferProjection;
 
 //in float cutoutBlock;
 in float id;
@@ -40,12 +58,24 @@ in vec3 vP;
 
 in vec4 color;
 
-vec3 nvec3(vec4 pos) {
-    return pos.xyz / pos.w;
+float haltonSequence(in int index, in float base) {
+  float result = 0.0;
+  float ib = 1.0 / base;
+  float f = ib;
+
+  float i = float(index);
+
+  while(i > 0.0){
+    result += f * mod(i, base);
+    i = floor(i / base);
+    f *= ib;
+  }
+
+  return result;
 }
 
-vec4 nvec4(vec3 pos) {
-    return vec4(pos.xyz, 1.0);
+vec2 haltonSequenceOffsets2n3(in int index) {
+  return vec2(haltonSequence(index, 2.0), haltonSequence(index, 3.0));
 }
 
 vec2 normalEncode(vec3 n) {
@@ -54,10 +84,7 @@ vec2 normalEncode(vec3 n) {
     return enc;
 }
 
-#define Taa_Support 1
-
-#include "libs/jittering.glsl"
-#include "libs/taa.glsl"
+#include "libs/common.inc"
 
 vec2 OffsetCoord(in vec2 coord, in vec2 offset)
 {
@@ -86,64 +113,33 @@ vec2 OffsetCoord(in vec2 coord, in vec2 offset)
 }
 
 vec2 ParallaxMapping(in vec2 coord, in vec3 vP, in float distance){
-  vec2 r = coord;
-
   int steps = int(POM_Steps);
 
   float d = clamp((-distance + 32.0 - 2.0) / 8.0, 0.0, 1.0);
 
-  if(texture2D(normals, coord).a < 1.0 && distance < 32.0 && texture2D(texture, coord).a > 0.01){
-    vec2 dt = vP.xy / abs(vP.z) / steps;
-         dt *= d * 0.001 * (POM_Depth * POM_Depth);
+  if(texture2D(normals, coord).a < 1.0 && distance < 32.0){
+    vec2 dt = vP.xy / length(vP.xyz) / steps * d;
+         dt *= 0.01;
+         //dt = dt * 0.5 + 0.5;
+         dt /= vec2(atlasSize) / max(atlasSize.x, atlasSize.y);
+         //dt = dt * 2.0 - 1.0;
 
-    float layerHeight = 1.0 / steps / (POM_Depth * POM_Depth);
-          //layerHeight *= 0.1;
 
+    float layerHeight = (1.0 / steps);
+    //#ifndef Continuum2_Texture_Format
+    //      layerHeight /= POM_Depth * POM_Depth * 0.5;
+    //#endif
 
-    /*
-    *texture be more deep
-    ^|
-    ||       ...
-    D|      _/
-    e|    _/
-    e|  _/
-    p|_/
-     |-------------
-      i+ --->
-============================
-    *raycast
-    ^|...
-    ||   \_
-    D|     \_
-    e|       \_
-    e|         \_
-    p|           \
-     |-------------
-      i+ --->
-============================
-    ?_?
-    */
-    float height = 0.0;
-/*
+    float height = 0.5;
+
     for(int i = 0; i < steps; i++){
       float heightMap = texture2D(normals, coord).a - 1.0;
       height -= layerHeight;
 
       if(heightMap > height) break;
-      coord = OffsetCoord(coord, dt * 10.0 * -(height));
-    }
-*/
-    //r = OffsetCoord(coord, dt * 10.0);
 
-    for(int i = 0; i < steps; i++){
-    //if(texture2D(normals, coord).a < texture2D(normals, r).a)
-    //r = OffsetCoord(r, dt * 10.0);
-      float heightMap = texture2D(normals, coord).a - 1.0;
-      height -= layerHeight;
-
-      if(heightMap > height) break;
-
-      coord = OffsetCoord(coord, dt * (-height + (-heightMap + height)));
+      coord = OffsetCoord(coord, dt * (-height + (-heightMap + height)) * POM_Depth * POM_Depth * 0.5);
+      //-height + (-heightMap + height)
     }
   }
 
@@ -160,27 +156,29 @@ float ParallaxShadow(in vec2 coord, in vec3 vP, in float distance){
   int steps = 4;
 
   if(texture2D(normals, coord).a < 1.0 && distance < 32.0) {
-    vec2 dt = vP.xy / abs(vP.z) / steps;
-         dt *= 0.0005 * POM_Depth;
+    vec2 dt = vP.xy / steps;
+         dt *= 0.02;
+         //dt /= vec2(atlasSize) / max(atlasSize.x, atlasSize.y);
          //dt = -dt;
 
     float layerHeight = 1.0 / steps;
 
     float height = 0.0;
 
-    float fixSize = 128.0 / tileResolution;
-          fixSize *= 0.25;
+    vec2 tileSizeReSet = atlasSize;
+    //float lowDetail = 1.0 / (tileResolutionAuto / 64.0);
 
-    coord = floor(coord * tileResolution * tileResolution * fixSize) / (tileResolution * tileResolution * fixSize);
+    coord = floor(coord * tileSizeReSet) / (tileSizeReSet);
+    //coord = OffsetCoord(coord, dt * -(layerHeight));
 
-    float heightMapRaw = texture2DLod(normals, coord, 0).a;
+    float heightMapRaw = texture2D(normals, coord).a - 1.0;
 
     for(int i = 0; i < steps; i ++){
-    height += layerHeight;
-    coord = OffsetCoord(coord, dt * (height));
-    float heightMap = texture2DLod(normals, coord, 0).a;
+    height -= layerHeight;
+    float heightMap = texture2D(normals, coord).a - 1.0;
+    coord = OffsetCoord(coord, dt * (-height + (-heightMap + height)) * POM_Depth * POM_Depth * 0.5);
 
-    if(heightMap < height + layerHeight && heightMap - 0.007 > heightMapRaw) {
+    if(heightMap > height && heightMap - 0.001 > heightMapRaw) {
       #ifdef Enabled_Soft_Parallax_hadow
       shading += 1.0 / steps;
       #else
@@ -196,13 +194,14 @@ float ParallaxShadow(in vec2 coord, in vec3 vP, in float distance){
   shading = pow(shading, 5.0);
   #endif
 
-  float d = clamp((-distance + 32.0 - 2.0) / 8.0, 0.0, 1.0);
+  float d = clamp((-distance + 32.0) / 16.0, 0.0, 1.0);
 
 	return mix(1.0, shading, d);
 }
 
 
 void main() {
+  //if(dot(normal, normalize(vP)) > 0.0) discard;
   mat3 tbnMatrix = mat3(tangent, binormal, normal);
 
   //vec3 n = normal;
@@ -215,57 +214,210 @@ void main() {
   float l = 1.0;
 
   vec2 uvP = texcoord;
-       uvP = ParallaxMapping(uvP, normalize(vP * tbnMatrix), distance);
+  //if(nvec3(gbufferProjection * nvec4(vP)).x * 0.5 + 0.5 < 0.5)
+  uvP = ParallaxMapping(uvP, normalize(vP * tbnMatrix), distance);
 
 	float preShadow = clamp(dot(normalize(shadowLightPosition), normalize(normal)), 0.0, 1.0);
         preShadow = clamp(pow(preShadow, 5.0) * 100000, 0.0, 1.0);
         preShadow *= ParallaxShadow(uvP, normalize(shadowLightPosition * tbnMatrix), distance);
 
   vec4 albedo = texture2D(texture, uvP) * color;
-       albedo.a = step(0.01, albedo.a);
-       if(albedo.a < 0.001) discard;
+
+  if(albedo.a < 1.0 / tileResolution + 0.04) discard;
+  albedo.a = step(0.001, albedo.a);
+       //albedo.rgb = albedo.a > 0.2 ? albedo.rgb : vec3(0.5);
+       //albedo.a = 1.0;
 
   //albedo.rgb = vec3(1.0);
 
   //albedo.rgb = vec3(1.022,0.782,0.344);
 
-  vec4 speculars = texture2DLod(specular, uvP, 0.0);
-       //speculars.a = 1.0;
+  vec4 speculars = texture2D(specular, uvP);
+       speculars = vec4(vec3(0.0), 1.0);
+       speculars.a = step(0.001, speculars.a);
        //speculars.r = pow(speculars.r, 1.2);
 
   #ifdef Continuum2_Texture_Format
   speculars = vec4(speculars.b, speculars.r, speculars.g * 0.0, speculars.a);
   #endif
 
+  //#if MC_VERSION > 11202
+  //speculars = vec4(0.001, 0.0, 0.0, 1.0);
+  //#endif
+
+  //if(speculars.a < 0.001) speculars.r = 0.21;
+
+  speculars.b = 0.0;
+  speculars.r = mix(0.2, speculars.r, speculars.a);
+
   //speculars.b = max(speculars.b, texture2DLod(specular, uvP, 1).b + texture2DLod(specular, uvP, 2).b * 0.5);
 
   vec3 normalTexture = texture2D(normals, uvP).xyz * 2.0 - 1.0;
+       normalTexture.xy *= step(0.0, -dot(normalize(vP), normalize(tbnMatrix * normalTexture)));
+       normalTexture = normalize(tbnMatrix * normalTexture);
 
-  //normalTexture.xy *= 1.0 - speculars.g * pow(speculars.r, 3.0) * 0.58;
-  //normalTexture.xy *= pow(1.0 - speculars.r, 2.0);
-  //normalTexture.xy *= .0;
-  normalTexture = normalize(tbnMatrix * normalTexture);
-  normalTexture.xy = normalEncode(normalTexture);
+  //if(clamp01(dot(normalize(vP), normalTexture)) <= 0.0) discard;
 
-  //albedo.rgb = vec3(1.022, 0.782, 0.344);
-  //speculars.r = 1.0;
-  //speculars.g = 1.0;
 
-  //speculars.r = max(speculars.r, metalBlock * 0.782);
-  //speculars.g = max(speculars.g, metalBlock);
+  vec2 c = vec2(atlasSize.xy) / max(atlasSize.x, atlasSize.y);
 
-  //if(nvec3(gbufferProjection * nvec4(vP)).x * 0.5 + 0.5 < 0.5)albedo.rgb = vec3(1.0);
+  int lowDetailLevel = 8;
+  vec2 LoDResolution = vec2(tileResolution) / lowDetailLevel;
+  vec2 LoDPixel = 1.0 / LoDResolution;
 
-  //albedo.rgb = mat3(gbufferModelViewInverse) * gbufferModelView[1].xyz;
+  vec2 tileSizePixel = vec2(atlasSize) / tileResolution;
 
-  //albedo.rgb = mat3(gbufferModelViewInverse) * tangent;
-  //albedo.rgb = mat3(gbufferModelViewInverse) * normalize(mat3(t, b, n) * (texture2D(normals, uvP).xyz * 2.0 - 1.0));
-  //albedo.rgb = max(vec3(0.0), albedo.rgb * 0.5 + 0.5);
+  vec2 pixel4x4 = (round((texcoord * vec2(atlasSize) - 8.0 / lowDetailLevel) * LoDPixel)) / vec2(atlasSize) * LoDResolution;
+  //vec2 pixel0 = (floor(texcoord * vec2(atlasSize) / tileResolution)) / vec2(atlasSize) * tileResolution;
+  vec3 tileTextureAverage = vec3(0.0);
+  vec2 pixel0 = floor(texcoord * tileSizePixel) / tileSizePixel + (1.0 / atlasSize);
 
-/* DRAWBUFFERS:01235 */
+  int count = 0;
+
+  vec3 maxColor = vec3(0.0);
+  vec3 minColor = vec3(1.0);
+
+  float maxLum = 0.0;
+
+  vec2 tileMaxCoord = texcoord + (1.0 / atlasSize) * tileResolution;
+  //vec2 tileMinCoord =
+
+  for(int i = 0; i < 16; i++) {
+    vec2 ramdomForm = (pixel0 + haltonSequenceOffsets2n3(i) / atlasSize * tileResolution * 0.99);
+
+    vec4 textureTemp = texture2D(texture, ramdomForm) * color;
+    tileTextureAverage += textureTemp.rgb;
+    maxColor = max(maxColor, textureTemp.rgb);
+    //minColor = min(minColor, textureTemp.rgb);
+    maxLum = max(maxLum, (textureTemp.r + textureTemp.g + textureTemp.b) * 0.3333);
+  }
+
+  tileTextureAverage /= 16.0;
+
+  /*
+  for(int i = 0; i < lowDetailLevel; i++){
+    for(int j = 0; j < lowDetailLevel; j++){
+      vec4 textureTemp = texture2D(texture, floor(pixel0 * LoDPixel * atlasSize + vec2(i, j) + 0.01) / vec2(atlasSize) * LoDResolution);
+
+      //if(textureTemp.a > 0.001){
+        tileTextureAverage += textureTemp.rgb;
+
+        maxColor = max(textureTemp.rgb, maxColor);
+        //minColor = max(textureTemp.rgb, minColor);
+
+        count++;
+      //}
+    }
+  }
+  */
+
+  //tileTextureAverage *= 1.0 / count;
+
+  tileTextureAverage *= color.rgb;
+  maxColor *= color.rgb;
+
+  //float up =
+
+  //albedo.rgb = tileTextureAverage;
+
+  //speculars.r = 1.0 - (dot03(maxColor) / maxComponent(tileTextureAverage));// / maxComponent(tileTextureAverage);
+  //speculars.r = pow2(speculars.r);
+
+  //albedo.rgb = vec3( pow2(1.0 - (getLum(maxColor) / maxComponent(tileTextureAverage)) * 0.7 * getLum(maxColor)) );
+
+  float highLight = (maxColor.r + maxColor.g + maxColor.b) * 0.333;
+        //highLight = pow5(1.0 - abs(highLight - 1.0));
+  //speculars.r = (dot03(maxColor) * highLight) / (maxComponent(tileTextureAverage)) * dot03(maxColor);
+  //albedo.rgb = vec3((highLight * dot03(maxColor)) / (1.001 - maxComponent(tileTextureAverage)) * dot03(maxColor));
+
+  //speculars.r = highLight / maxComponent(tileTextureAverage) * 0.7;
+  //speculars.r = 1.0 - pow2(1.0 - (dot03(maxColor) / maxComponent(tileTextureAverage)) * 0.7 * dot03(maxColor));
+
+  //speculars.r = highLight / (0.001 + maxComponent(tileTextureAverage)) * dot03(maxColor);
+  //speculars.r = pow2(speculars.r) * 20.0;
+  //speculars.r = pow5(1.0 - abs(maxLum - 1.0)) / dot03(tileTextureAverage) * clamp01(dot03(maxColor - (tileTextureAverage)) / minComponent(tileTextureAverage) * 10.0);
+  speculars.r = pow5(maxLum) / dot03(tileTextureAverage) * clamp01(dot03(maxColor - tileTextureAverage) * maxComponent(tileTextureAverage)) / minComponent(tileTextureAverage) * 2.0;
+  //speculars.r *= clamp01(dot03(albedo.rgb * 2.0 - tileTextureAverage.rgb) * 1.0 * maxComponent(tileTextureAverage));
+  speculars.r = clamp(speculars.r, 0.001, 0.999);
+
+  //albedo.rgb = maxColor;
+
+  //albedo.rgb = vec3(dot03(maxColor) - minComponent(maxColor));
+
+
+  //albedo.rgb = tileTextureAverage;
+  /*
+  vec3 gold = vec3(1.0, 0.782, 0.344);
+  gold = gold + (gold - 1.0) * 0.1;
+
+  vec3 goldBlock = gold - tileTextureAverage;
+  vec3 goldDetail = gold - albedo.rgb;
+  vec3 metalHightLight = clamp01(albedo.rgb - tileTextureAverage);
+
+  //albedo.rgb = abs(goldBlock.rrr + 0.01) * 10.0;
+
+  goldBlock.r = clamp01(abs(dot(goldBlock, goldBlock) + 0.01) * 10.0);
+
+  albedo.rgb = vec3(clamp01(
+    sqrt(abs(dot(goldBlock, goldBlock) / minComponent(tileTextureAverage) - 1.1)) * 1.0
+    ));
+*/
+  //if(goldBlock.r > 0.06 && goldBlock.r < 0.16) speculars.rgb = vec3(0.78, 1.0, 0.0);
+  //speculars.rg = mix(vec2(0.78, 1.0), speculars.rg, goldBlock.r);
+
+  //albedo.rgb = gold;
+  //albedo.rgb = vec3(abs(goldBlock.r - 0.1) * 100.0);
+  //albedo.rgb = tileTextureAverage;
+
+  //else if(dot(goldDetail, goldDetail) < 0.032) speculars.rgb = vec3(0.78, 1.0, 0.0);
+  //else if(pow2(dot(metalHightLight, metalHightLight)) > 0.08) speculars.rgb = vec3(0.78, 1.0, 0.0);
+  //albedo.rgb = metalHightLight;
+
+  //albedo.rgb = albedo.rgb + (tileTextureAverage.rgb - albedo.rgb) * 2.5;
+
+  //albedo.rgb = vec3(abs(dot(gold, gold)) <= 0.04);
+  //speculars.rg = mix(vec2(1.0 - dot(vec3(0.3333), abs(tileTextureAverage - albedo.rgb)), 1.0), speculars.rg, step(0.04, dot(gold, gold)));
+
+  int blockID = int(round(id));
+
+  //if(blockID == 35) speculars = vec4(0.23, 0.051, 0.0, 1.0);
+  //if(blockID == 235) speculars = vec4(0.846, 0.057, 0.0, 1.0);
+
+  //albedo *= color;
+
+  //albedo.rgb = texture2D(texture, pixel4x4).rgb;
+  //avgColor = texture2D(texture, floor(pixel0 * LoDPixel * atlasSize + vec2(2, 2) + 0.001) / vec2(atlasSize) * LoDResolution).rgb;
+
+  //float minColor = maxComponent(albedo.rgb);
+  //float maxColor = minComponent(albedo.rgb);
+/*
+  gold = gold + (gold - 1.0) * 0.25;
+  //gold.r = clamp01((dot(gold, gold) / (maxColor) - 0.05) * 20.0);
+  if(dot(gold, gold) / minComponent(albedo.rgb) <= 0.1) {speculars.r = 0.72, speculars.g = 1.0;}
+
+  albedo.rgb = gold;
+*/
+/*
+  speculars.r = mix(0.782, speculars.r, gold.r);
+  speculars.g = mix(1.0, speculars.g, gold.r);
+
+  albedo.rgb = avgColor / minComponent(avgColor) * 0.1;//vec3(minComponent())
+*/
+  //vec3 plants = color.rgb;
+  //     plants = 1.0 - plants;
+  //     plants.r = dot(color.rgb, plants);
+  //if(plants.r > 0.5);
+  //speculars.r = mix(speculars.r, 0.7, pow(plants.r, 0.5));
+
+
+  //albedo.rgb = avgColor * color.rgb;
+
+  //float blockID = id;
+  //if(-dot(normal, normalize(vP)) < 0.06) blockID = 1.0;
+
+/* DRAWBUFFERS:0123 */
   gl_FragData[0] = albedo;
   gl_FragData[1] = vec4(lmcoord, id / 255.0, 1.0);
-  gl_FragData[2] = vec4(normalTexture.xy, preShadow, 1.0);
+  gl_FragData[2] = vec4(normalEncode(normalTexture), preShadow, 1.0);
   gl_FragData[3] = speculars;
-  gl_FragData[4] = vec4(vec3(0.0), 1.0);
 }

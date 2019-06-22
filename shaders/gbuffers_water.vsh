@@ -54,8 +54,10 @@ void main() {
     //biomesColor.rgb = vec3(0.682, 0.415, 0.0) * 0.5;
   }
 
-  if(mc_Entity.x == 106 || mc_Entity.x == 20 || mc_Entity.x == 95) id = 20.0;
+  if(mc_Entity.x == 20 || mc_Entity.x == 95) id = 20.0;
   if(mc_Entity.x == 79) id = 79.0;
+  if(mc_Entity.x == 90) id = 90.0;
+  if(mc_Entity.x == 106 || mc_Entity.x == 160) id = 106.0;
 
   normal  = normalize(gl_NormalMatrix * gl_Normal);
   tangent = normalize(gl_NormalMatrix * at_tangent.xyz);

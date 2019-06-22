@@ -34,6 +34,8 @@ vec3 AtmosphericScattering(in vec3 o, in vec3 wP, in vec3 sP, in float dither){
 
   float u = escape(cP, wP, rA) / steps * 0.5;
 
+	//sP *= 1.0;
+
 	if(u > 0.0){
   vec3 r = vec3(0.0);
   vec3 m = vec3(0.0);
@@ -82,11 +84,27 @@ vec3 CalculateSky(in vec3 P, in vec3 sP, in float H){
 }
 
 vec3 CalculateSky(in vec3 viewVector, in vec3 lightVector, in float height, in float dither){
-	vec3 scattering = AtmosphericScattering(vec3(0.0, 1000 + (height - 63.0), 0.0), mat3(gbufferModelViewInverse) * viewVector, lightVector, dither);
-	scattering = max(scattering, vec3(0.0));
+	viewVector = mat3(gbufferModelViewInverse) * viewVector;
 
-	return scattering * 0.16;
+	vec3 scattering = AtmosphericScattering(vec3(0.0, 1000 + (height - 63.0), 0.0), viewVector, lightVector, dither);
+	scattering = max(scattering * 0.16, vec3(0.0));
+
+	//if(viewVector.y < 0.0) scattering = vec3(-viewVector.y);
+
+	//scattering = mix(scattering, vec3(1.0), clamp01(-viewVector.y + 0.05));
+
+	return scattering;
 }
+
+vec3 CalculateAtmosphericScattering(in vec3 color, in float factor){
+	//color = vec3(0.0);
+	//color = rgb2L(color);
+	color = mix(color, (skyLightingColorRaw + sunLightingColorRaw * 0.5), (clamp01(factor)));
+	//color = L2rgb(color);
+
+	return color;
+}
+
 /*
 float GetFogDensity(in float dist, in bool calcLighting){
 	if(calcLighting){

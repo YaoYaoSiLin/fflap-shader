@@ -3,7 +3,6 @@
 #define TAA_Color_Sampler_Size 0.55   	//[0.2 0.25 0.3 0.35 0.4 0.45 0.5 0.55 0.6 0.65 0.7 0.75 0.8 0.85 0.9]
 #define TAA_Depth_Sampler_Size 0.55   	//[0.2 0.25 0.3 0.35 0.4 0.45 0.5 0.55 0.6 0.65 0.7 0.75 0.8 0.85 0.9]
 
-const bool gaux2Clear = false;
 const bool gaux4Clear = false;
 
 uniform sampler2D gdepth;
@@ -17,6 +16,7 @@ uniform sampler2D depthtex1;
 #define colorSampler gaux2
 
 uniform mat4 gbufferProjectionInverse;
+uniform mat4 gbufferProjection;
 uniform mat4 gbufferModelViewInverse;
 uniform mat4 gbufferPreviousModelView;
 uniform mat4 gbufferPreviousProjection;
@@ -57,11 +57,6 @@ vec3 decodePalYuv(vec3 yuv) {
     return L2rgb(rgb);
 }
 
-float minComponent( vec3 a )
-{
-    return min(a.x, min(a.y, a.z) );
-}
-
 vec3 clipToAABB(vec3 color, vec3 minimum, vec3 maximum) {
     // note: only clips towards aabb center (but fast!)
     vec3 center  = 0.5 * (maximum + minimum);
@@ -76,31 +71,34 @@ vec3 clipToAABB(vec3 color, vec3 minimum, vec3 maximum) {
 }
 
 void main(){
-  //if(int(texture2D(gdepth, texcoord).z * 255) == 254) discard;
+  vec2 unJitterUV = texcoord - haltonSequence_2n3[int(mod(frameCounter, 16))] * pixel * 0.6;
 
-  vec3 color = encodePalYuv(texture2D(gaux2, texcoord).rgb);
-  vec3 minColor = vec3(1.0);
+  vec3 color = encodePalYuv(texture2D(gaux2, unJitterUV).rgb);
+
   vec3 maxColor = vec3(-1.0);
-  vec3 avgColor = vec3(0.0);
+  vec3 minColor = vec3(1.0);
+
+  vec3 sharpen = vec3(0.0);
 
   float depth = 1.0;
 
   for(float i = -1.0; i <= 1.0; i += 1.0){
     for(float j = -1.0; j <= 1.0; j += 1.0){
-      float depthtemp = texture2D(depthtex0, texcoord + vec2(i, j) * pixel).x;
+      vec3 colortemp = encodePalYuv(texture2D(gaux2, unJitterUV + vec2(i, j) * pixel * TAA_Color_Sampler_Size).rgb);
 
-      depth = min(depth, depthtemp);
+      maxColor = max(maxColor, colortemp);
+      minColor = min(minColor, colortemp);
 
-      vec3 c = encodePalYuv(texture2D(gaux2, texcoord + vec2(i, j) * pixel * TAA_Color_Sampler_Size).rgb);
+      sharpen += colortemp;
 
-      minColor = min(minColor, c);
-      maxColor = max(maxColor, c);
-      avgColor += c;
+      depth = min(depth, texture2D(depthtex0, texcoord + vec2(i, j) * pixel).x);
     }
   }
 
-  vec3 sharpen = (avgColor - color) * 0.125;
-  avgColor *= 1.0 / 9.0;
+  sharpen = (sharpen - color) * 0.125;
+
+  //maxColor = encodePalYuv(maxColor);
+  //minColor = encodePalYuv(minColor);
 
   vec4 vP = gbufferProjectionInverse * nvec4(vec3(texcoord, depth) * 2.0 - 1.0);
        vP /= vP.w;
@@ -115,49 +113,43 @@ void main(){
   vec2 previousCoord = pvP.xy * 0.5 + 0.5;
        previousCoord = texcoord - previousCoord;
        previousCoord = -previousCoord + texcoord;
-       //previousCoord = texcoord;
 
-  vec3 lastColor = encodePalYuv(texture2D(lastColorSampler, previousCoord).rgb);
-       //lastColor = mix(color, lastColor, lastMixRate);
-       lastColor = mix(lastColor, color, 0.01);
-       //if(texcoord.x < 0.5)lastColor += (lastColor - avgColor) * 0.25;
+  float blendWeight = sqrt(dot(0.5 - abs(fract(previousCoord * resolution) - 0.5), vec2(1.0))) * float(floor(previousCoord) == vec2(0.0)) * 0.9;
 
-  //previousCoord += haltonSequence_2n3[int(mod(frameCounter, 16))] * pixel;
+  float mixRate = texture2D(gaux4, previousCoord).a * float(floor(previousCoord) == vec2(0.0));
 
-  float disanceFactor = clamp01((abs(texture2D(gaux4, previousCoord).a * 1024.0 - length(vP.xyz)) - 0.5)); // - texture2D(gaux4, previousCoord).a * 1024.0)
-  //clamp01(abs(disanceFactor + 0.05) + 0.05)
-  vec3 colorFactor = clamp01((decodePalYuv(lastColor) - decodePalYuv(color)));
+  vec3 lastColor = encodePalYuv(texture2D(gaux4, previousCoord).rgb);
+       lastColor = mix(color, lastColor, mixRate * 0.995);
 
-  vec3 lastImege = mix(encodePalYuv(texture2D(gaux4, texcoord).rgb), color, clamp01(disanceFactor + colorFactor));
+  vec2 uvNear = ((texcoord - 0.5) - (unJitterUV - 0.5)) * resolution - ((previousCoord - 0.5) - (unJitterUV - 0.5)) * resolution;
 
-  float blendWeight = 0.0;
+  float weightStatic = length(((texcoord - 0.5) - (unJitterUV - 0.5)) * resolution * 2.0);
+  float weightMotion = length(((previousCoord - 0.5) - (unJitterUV - 0.5)) * resolution * 2.0);
 
-  if(floor(previousCoord) == vec2(0.0)){
-    minColor = min(lastImege, minColor);
-    maxColor = max(lastImege, maxColor);
+  float maxWeight = clamp01(max(weightMotion, weightStatic) * 0.5);
+  float minWeight = 1.0 - clamp01(length(((previousCoord - 0.5) - (unJitterUV - 0.5)) * 2.0) * 32.0);
 
-    blendWeight = sqrt(dot(0.5 - abs(fract(previousCoord * resolution) - 0.5), vec2(1.0)));
+  float colorDiff = dot(vec3(0.3333), abs(texture2D(gaux2, texcoord).rgb - texture2D(gaux2, unJitterUV).rgb));
+
+  vec3 lastColorNear = mix(color, lastColor, clamp01(64.0 * colorDiff + 0.1) * 0.9 * minWeight);
+
+  if(int(round(texture2D(gdepth, texcoord).z * 255.0)) != 254){
+    //maxColor = max(maxColor, lastColorNear);
+    //minColor = min(minColor, lastColorNear);
   }
 
   vec3 antialiased = clipToAABB(lastColor, minColor, maxColor);
-       //antialiased = mix(antialiased, color, clamp01(0.2 * (decodePalYuv(antialiased) - decodePalYuv(color)) - 0.0));
-       //antialiased = mix(antialiased, color, 0.05);
-       //antialiased = mix(antialiased, color, dot(vec3(0.3333), clamp01(decodePalYuv(antialiased) - decodePalYuv(lastColor))));
-       //antialiased = mix(antialiased, lastColor, 0.05);
-       //antialiased = mix(antialiased, color, 0.005);
-       antialiased = mix(color, antialiased, clamp01(0.1 + blendWeight * 0.9));
+       //antialiased += (antialiased - sharpen) * 0.025 * weight * 50;
+       //antialiased = mix(antialiased, color, 0.001 + 0.009 * lastColorNear);
+       antialiased += (antialiased - sharpen) * 0.0033 * lastColorNear;
+       //antialiased = mix(color, antialiased, blendWeight);
 
-  bool isHand = int(round(texture2D(gdepth, texcoord).z * 255.0)) == 254.0;
-
-  if(isHand) antialiased = (color);
   antialiased = decodePalYuv(antialiased);
+  //antialiased += (antialiased - decodePalYuv(sharpen)) * 0.25 * weight * 2.0;
 
-  //if(lastMixRate )
-
-
-  //color = decodePalYuv(color);
+  //float lum = getLum(texture2D(gaux2, vec2(0.5)).rgb);
 
 /* DRAWBUFFERS:57 */
   gl_FragData[0] = vec4(antialiased, 1.0);
-  gl_FragData[1] = vec4(antialiased, length(vP.xyz) / 1024.0);
+  gl_FragData[1] = vec4(antialiased, 1.0);
 }

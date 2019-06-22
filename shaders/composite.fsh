@@ -3,12 +3,14 @@
 #define SpecularityReflectionPower 2.0            //[1.0 1.2 1.5 1.75 2.0 2.25 2.5 2.75 3.0]
 
 uniform sampler2D gcolor;
+uniform sampler2D gdepth;
 uniform sampler2D gnormal;
 uniform sampler2D composite;
 uniform sampler2D gaux2;
 uniform sampler2D gaux3;
 
 uniform sampler2D depthtex0;
+uniform sampler2D depthtex1;
 
 uniform mat4 gbufferModelViewInverse;
 uniform mat4 gbufferProjectionInverse;
@@ -32,7 +34,7 @@ in vec3 skyLightingColorRaw;
 vec2 resolution = vec2(viewWidth, viewHeight);
 vec2 pixel = 1.0 / resolution;
 
-#define CalculateHightLight 1
+#define CalculateHightLight 0
 
 #include "libs/common.inc"
 #include "libs/atmospheric.glsl"
@@ -47,16 +49,14 @@ vec3 normalDecode(vec2 enc) {
 }
 
 vec3 RemovalColor(in vec3 image, in vec3 color, in float t){
-  return (image - color) / (1.0 - t) + color;
-}
-
-float maxComponent(in vec3 a) {
-  return max(a.x, max(a.y, a.z));
+  return (image - color) / max(0.01, 1.0 - t) + color;
 }
 
 void main(){
   vec4 albedo = texture2D(gcolor, texcoord);
   bool isTranslucentBlocks = albedo.a > 0.99;
+
+  bool isWater = int(round(texture2D(gdepth, texcoord).z * 255.0)) == 8;
 
   vec3 normal = normalDecode(texture2D(gnormal, texcoord).xy);
   float alpha = texture2D(gnormal, texcoord).z;
@@ -86,12 +86,9 @@ void main(){
 
   vec3 sP = mat3(gbufferModelViewInverse) * normalize(sunPosition);
 
-  //albedo.rgb = rgb2L(albedo.rgb);
+  albedo.rgb = rgb2L(albedo.rgb);
 
-  //Side A
   if(albedo.a > 0.99){
-    vec3 skySpecularReflection = L2rgb(CalculateSky(normalize(rP), sP, cameraPosition.y, 0.5));
-
     //vec2 rcoord = nvec3(gbufferProjection * nvec4(vP.xyz + refractP)).xy * 0.5 + 0.5;
 
     //color = texture2D(gaux2, rcoord);
@@ -113,49 +110,22 @@ void main(){
     float g = VisibilityTerm(d, ndotv, ndotl);
     float specularity = pow(1.0 - g, SpecularityReflectionPower);
 
-    //if(floor(alpha) == 0.0) {
-      vec3 translucentBlockColor = rgb2L(texture2D(gcolor, texcoord).rgb);
+    vec3 transColor = albedo.rgb * skyLightingColorRaw;
+         //transColor += albedo.rgb * skyLightingColorRaw * sunLightingColorRaw * fading * 5.0;
+           //transColor += sunLightingColorRaw * fading * shading;
 
-      float shading = pow(clamp01(dot(normalize(shadowLightPosition), normal)), 0.2);
+    transColor = L2rgb(transColor);
 
-      translucentBlockColor = translucentBlockColor * sunLightingColorRaw * fading * shading + translucentBlockColor * skyLightingColorRaw;
-      translucentBlockColor = L2rgb(translucentBlockColor);
+    vec3 skySpecularReflection = L2rgb(CalculateSky(normalize(rP), sP, cameraPosition.y, 0.5));
 
-      vec3 tranBlockWithSpecular = mix(translucentBlockColor, skySpecularReflection, f * specularity);
+    vec3 transColorSpec = mix(transColor, skySpecularReflection, f * specularity);
 
-      //if(color.a < 0.999){
-        vec3 solidBlockColor = RemovalColor(color.rgb, tranBlockWithSpecular.rgb, color.a);
-             solidBlockColor = mix(solidBlockColor, vec3(0.0), clamp01((color.a * 1.0 - 0.92) * 12.5));
-
-        //color.rgb = RemovalColor(color.rgb, clamp01(solidBlockColor), 1.0 - color.a);
-        //color.rgb = RemovalColor(texture2D(gaux2, texcoord).rgb, color.rgb, color.a);
-
-        color.rgb = RemovalColor(color.rgb, tranBlockWithSpecular, color.a);
-        //if(alpha > 0.9) color.rgb = texture2D(gaux3, texcoord).rgb;
-        //color.rgb = mix(clamp01(color.rgb), texture2D(gaux3, texcoord).rgb, float(floor(color.r) != 0.0 || floor(color.g) != 0.0 || floor(color.b) != 0.0));
-
-        //color.rgb = RemovalColor(color.rgb, skySpecularReflection, dot(f, vec3(0.3333)) * specularity);
-        solidBlockColor = mix(solidBlockColor, vec3(0.0), clamp01((color.a * 1.0 - 0.92) * 12.5));
-        //color.rgb = clamp01(color.rgb);
-
-        //color.rgb = RemovalColor(color.rgb, solidBlockColor, 1.0 - color.a);
-        //color.rgb = RemovalColor(color.rgb, skySpecularReflection, dot(vec3(0.3333), f) * specularity);
-      //}else{
-        //color.rgb = vec3(0.0);
-      //}
-
-      //color.rgb = RemovalColor(color.rgb, translucentBlockColor.rgb, color.a);
-    //}
-    //color.rgb = color.aaa * 0.1;
+    color.rgb = clamp01(RemovalColor(color.rgb, transColorSpec, color.a));
+    color.rgb *= (1.0 - clamp01(color.a * 10.0 - 9.0));
   }
 
-  //color.rgb = mix(color.rgb, texture2D(gaux3, texcoord).rgb, clamp01((alpha * 1.0 - 0.92) * 12.5));
-  //color.rgb = mix(texture2D(gaux3, texcoord).rgb, color.rgb, clamp01((color.a * 1.0 - 0.92) * 12.5));
-  color.rgb = mix(color.rgb, color.rgb * 0.5 + 0.5, albedo.a * albedo.a);
+  albedo.rgb = L2rgb(albedo.rgb);
 
-  //color = L2rgb(color);
-
-/* DRAWBUFFERS:05 */
-  gl_FragData[0] = albedo;
-  gl_FragData[1] = color;
+/* DRAWBUFFERS:5 */
+  gl_FragData[0] = color;
 }

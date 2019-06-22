@@ -1,3 +1,5 @@
+#define Enabled_TAA
+
 const vec2 haltonSequence_2n3[16] = vec2[16](vec2(0.5    , 0.33333),
                                              vec2(0.25   , 0.66666),
                                              vec2(0.75   , 0.11111),

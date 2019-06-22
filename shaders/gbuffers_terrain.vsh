@@ -47,6 +47,13 @@ void main() {
   id = 0.0;
   //cutoutBlock = 0.0;
 
+  normal  = normalize(gl_NormalMatrix * gl_Normal);
+  tangent = normalize(gl_NormalMatrix * at_tangent.xyz);
+  binormal = cross(tangent, normal);
+
+  //if(mc_Entity.x == 11 || mc_Entity.x == 10) id = 10;
+  //if(mc_Entity.x == 1) position.x += 1000;
+
   bool leaves = mc_Entity.x == 18;
 
   bool plant = mc_Entity.x == 31;
@@ -55,10 +62,16 @@ void main() {
   bool double_plant_lower = mc_Entity.x == 176;
   bool double_plant = double_plant_upper || double_plant_lower;
 
+  bool unWaveingFarm = mc_Entity.x == 83;
+
+  //bool glazed_terracotta = mc_Entity.x == 235;
+
   //bool farm = mc_Entity.x == 59 || mc_Entity.x == 141 || mc_Entity.x == 142 || mc_Entity.x == 207;
 
   if(double_plant || plant) {
-    if(length(vP.xyz) < 1.0) position.xz += (wP.xz - cameraPosition.xz) * 2.0 * (1.0 - length(vP.xyz)) * mix((1.0 + (mc_midTexCoord.y - gl_MultiTexCoord0.y)) * 0.632, float(mc_midTexCoord.y > gl_MultiTexCoord0.y), float(double_plant_lower || plant));
+    //if(length(vP.xyz) < 1.0)
+    //position.xz += position.xz * clamp(1.0 - length(vP), 0.0, 1.0) * 0.1;
+    //position.xz += (wP.xz - cameraPosition.xz) * 2.0 * (1.0 - length(vP.xyz)) * mix((1.0 + (mc_midTexCoord.y - gl_MultiTexCoord0.y)) * 0.632, float(mc_midTexCoord.y > gl_MultiTexCoord0.y), float(double_plant_lower || plant));
 
     vec2 noise = texture2D(noisetex, (position.xz) / 64.0).xz * 80.0;
     float time = frameTimeCounter * 0.74;
@@ -97,16 +110,16 @@ void main() {
     //cutoutBlock = 1.0;
   }
 
+  if(unWaveingFarm) id = 83.0;
+
+  if(mc_Entity.x == 35)  id = 35.0;
+  if(mc_Entity.x == 235) id = 235.0;
+
   //position.xyz -= cameraPosition;
   //position = gbufferModelView * position;
 
   gl_Position = gl_ProjectionMatrix * gl_ModelViewMatrix * position;
   #ifdef Enabled_TAA
-  gl_Position.xy += haltonSequence_2n3[int(mod(frameCounter, 16))] * gl_Position.w * pixel * 2.0;
+  gl_Position.xy += haltonSequence_2n3[int(mod(frameCounter, 16))] * gl_Position.w * pixel;
   #endif
-
-  normal  = normalize(gl_NormalMatrix * gl_Normal);
-  tangent = normalize(gl_NormalMatrix * at_tangent.xyz);
-  binormal = cross(tangent, normal);
-
 }

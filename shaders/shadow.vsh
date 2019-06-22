@@ -21,6 +21,7 @@ varying vec2 texcoord;
 varying vec2 lmcoord;
 
 varying vec3 normal;
+varying vec3 vP;
 
 varying vec4 color;
 
@@ -52,6 +53,8 @@ void main() {
   bool double_plant = double_plant_upper || double_plant_lower;
 
   //bool farm = mc_Entity.x == 59 || mc_Entity.x == 141 || mc_Entity.x == 142 || mc_Entity.x == 207;
+
+	vP = (gl_ModelViewMatrix * gl_Vertex).xyz;
 
 	vec4 position = gl_Vertex;
 
@@ -90,6 +93,8 @@ void main() {
     position.xyz += wave * 0.021;
     //cutoutBlock = 1.0;
   }
+
+	//if(mc_Entity.x == 0) position.xyz += 10000;
 
 	position = gl_ProjectionMatrix * gl_ModelViewMatrix * position;
 	position.xy /= mix(1.0, length(position.xy), SHADOW_MAP_BIAS) / 0.95;

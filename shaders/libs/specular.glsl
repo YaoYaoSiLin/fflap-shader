@@ -1,5 +1,10 @@
 #define Continuum2_Texture_Format
 
+#define Default 0  //
+#define Blur  1  //
+
+#define Metal_Block_Reflection_Smoothness Default //[Default Blur]
+
 #define Enabled_ScreenSpaceReflection
   #define HightQualityReflection 8    //[-1 0 4 8 12 16 20 24 28 32]
   #define Half_Scale_Reflection
@@ -15,7 +20,7 @@ vec2 P2C(in vec3 P){
 //  return linearizeDepth(nvec3(gbufferProjection * nvec4(v)).z * 0.5 + 0.5);
 //}
 
-vec4 raytrace(in vec3 viewVector, in vec3 rayDirection, in vec3 normal, in float dither, in float d){
+vec4 raytrace(in vec3 viewVector, in vec3 rayDirection, in vec3 normal, in float dither, in float ra){
   #if (Stage == ScreenReflection && defined(Half_Scale_Reflection)) || (Stage == Composite && !defined(Half_Scale_Reflection))
   //if(roughness < 0.01) return vec4(0.0);
   //else{
@@ -32,11 +37,13 @@ vec4 raytrace(in vec3 viewVector, in vec3 rayDirection, in vec3 normal, in float
   vec3 testPoint = viewVector + normal * f * 0.05;
 
   //rayDirection *= max(0.05, (length(viewVector)) / (256.0 * 256.0) * 2049.0);
-  rayDirection *= 0.4 + f;//dot(normalize(viewVector), normal)
+  rayDirection *= 0.5 + f;//dot(normalize(viewVector), normal)
   //rayDirection *= 1.0 + length(normal);
 
   int sr = 0;
   int count = 0;
+
+  float ndotv = 1.0 - clamp01(dot(-normalize(viewVector), normal));
 
   //dither = dither * 2.0 - 1.0;
   //dither *= 0.005;
@@ -62,15 +69,16 @@ vec4 raytrace(in vec3 viewVector, in vec3 rayDirection, in vec3 normal, in float
 
           for(int i = 0; i < int(HightQualityReflection); i++){
             float r = (1.0 + float(i) * 2.0 * 3.14159) / float(HightQualityReflection) + dither;
+                  //r *= ra;
 
             vec3 n = vec3(cos(r), sin(r), 1.0);
                  //n.xy *= pow(roughness, 0.5);
-                 n.xy *= d;
+                 n.xy *= ra;
 
-            colorIndex += texture2D(reflectionSampler, uv + n.xy * 0.01);
+            colorIndex += texture2D(reflectionSampler, uv + n.xy);
 
             #ifdef skyReflectionSampler
-            vec3 skyReflection = texture2D(skyReflectionSampler, uv + n.xy * 0.01).rgb;
+            vec3 skyReflection = texture2D(skyReflectionSampler, uv + n.xy).rgb;
             colorIndex.rgb += skyReflection.rgb;
             #endif
           }
@@ -78,10 +86,10 @@ vec4 raytrace(in vec3 viewVector, in vec3 rayDirection, in vec3 normal, in float
           colorIndex /= HightQualityReflection;
           color = colorIndex;
         #else
-          color = texture2DLod(reflectionSampler, uv, float(HightQualityReflection + 1) * pow(roughness, 0.5) * 5.0);
+          color = texture2DLod(reflectionSampler, uv, float(HightQualityReflection + 1) * min(5.0, ra));
 
           #ifdef skyReflectionSampler
-          vec4 skyReflection = texture2DLod(skyReflectionSampler, uv, float(HightQualityReflection + 1) * pow(roughness, 0.5) * 5.0);
+          vec4 skyReflection = texture2DLod(skyReflectionSampler, uv, float(HightQualityReflection + 1) * min(4.0, ra));
           color.rgb += skyReflection.rgb * skyReflection.a;
           #endif
         #endif
@@ -99,13 +107,16 @@ vec4 raytrace(in vec3 viewVector, in vec3 rayDirection, in vec3 normal, in float
 */
         //if(color.a > 0.003) color.a = 1.0;
 
+        //color.rgb *= clamp01(g * d);
+        //color.a *= clamp01(g * d);
+
         break;
       }
 
       testPoint -= rayDirection;
-      rayDirection *= 0.04;
+      rayDirection *= 0.005;
     }else{
-      rayDirection *= 1.0 + (20.0 / float(SSR_Steps)) * 0.25 * float(maxf);// + 0.03 * float(maxf) / 4.0;
+      rayDirection *= 1.0 + (40.0 / float(SSR_Steps)) * 0.2 + maxf * maxf * maxf * 0.02;// + 0.03 * float(maxf) / 4.0;
       //0 + (16.0 / float(SSR_Steps)) * maxf * 0.13 + (float(SSR_Steps) * 0.001 * maxf)
     }
   }

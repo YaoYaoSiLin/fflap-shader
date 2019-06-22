@@ -1,5 +1,3 @@
-#define Enabled_TAA
-
 #if Taa_Support == 1 && defined(Enabled_TAA)
 uniform int frameCounter;
 

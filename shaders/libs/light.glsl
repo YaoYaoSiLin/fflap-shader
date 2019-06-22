@@ -43,7 +43,7 @@ vec3 CalculateFogLighting(in vec3 color, in float cameraHight, in float worldHig
 	return color;
 }
 
-vec4 CalculateShading(in sampler2D tex, in vec4 wP){
+vec4 CalculateShading(in sampler2D tex, in vec4 wP, in bool colorshading){
   float d = length(wP.xyz);
 
   if(d > shadowDistance) return vec4(0.0);
@@ -56,13 +56,15 @@ vec4 CalculateShading(in sampler2D tex, in vec4 wP){
 
   const float bias_pix = 0.0003;
 	vec2 bias_offcenter = abs(shadowPosition.xy * 2.0 - 1.0);
-  diffthresh = length(bias_offcenter) * bias_pix * 0.0 + shadowPixel * (d / far) * 1.0 + 0.0004;
+  diffthresh = shadowPixel * ((d / far) * 2.0 + length(texcoord * 2.0 - 1.0) + 1.0);
   //diffthresh *= 2.5;
 
   shading = vec3(1.0);
 
   if(floor(shadowPosition.xyz) == vec3(0.0)){
     shading = vec3(float(texture2D(tex, shadowPosition.xy).z + diffthresh > shadowPosition.z));
+
+    if(colorshading){
     #if CalculateShadingColor == 1
 
     vec4 colorShading = texture2D(shadowcolor1, shadowPosition.xy);
@@ -78,6 +80,7 @@ vec4 CalculateShading(in sampler2D tex, in vec4 wP){
     shading = mix(vec3(1.0), colorShading.rgb, colorShading.a * (1.0 - float(texture2D(shadowtex0, shadowPosition.xy).z + diffthresh > shadowPosition.z)) * (shading.x)) * shading;
 
     #endif
+    }
   }
 
   //shading = mix(vec3(1.0), shading, clamp01((-d + shadowDistance - 16.0) / 32.0));

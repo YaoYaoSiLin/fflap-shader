@@ -37,7 +37,13 @@ void main() {
   speculars = vec4(speculars.b, speculars.r, 0.0, speculars.a);
   #endif
 
+  speculars.b = 0.0;
+  speculars.r = clamp(speculars.r, 0.00001, 0.999);
   speculars.a = 1.0;
+
+  //#if MC_VERSION > 11202
+  //speculars = vec4(0.001, 0.0, 0.0, 1.0);
+  //#endif
 
   albedo.rgb = mix(albedo.rgb, entityColor.rgb, entityColor.a);
 

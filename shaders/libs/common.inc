@@ -9,8 +9,10 @@
 #define PostProcessing 10
 #define Final       11
 
-const float Pi = 3.1415;
+const float Pi = 3.14159;
+const float e = 2.71828;
 const float playerEyeLevel = 1.62;
+const float dynamicLightHight = 1.62;
 const float defaultHightLevel = 63.0;
 const float defaultHightLightLevel = 1000000.0;
 
@@ -43,6 +45,10 @@ float getLum(in vec3 color){
   return dot(color, vec3(0.2126, 0.7152, 0.0722));
 }
 
+float dot03(in vec3 x){
+  return dot(vec3(0.3333), x);
+}
+
 vec3 rgb2L(in vec3 color){
   return pow(color, vec3(2.2));
 }
@@ -55,6 +61,19 @@ float pow2(in float x){
   return x * x;
 }
 
+
+float pow3(in float x){
+  return x * x * x;
+}
+
 float pow5(in float x){
   return x * x * x * x * x;
+}
+
+float minComponent( vec3 a ) {
+    return min(a.x, min(a.y, a.z) );
+}
+
+float maxComponent( vec3 a ) {
+    return max(a.x, max(a.y, a.z) );
 }

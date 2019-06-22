@@ -1,5 +1,7 @@
 #version 130
 
+#define Brightness 3.5
+
 #define Enabled_TAA
 	#define TAA_Sharpen_Factor 0			//[0 5 10 15 20 25 30 35 40 45 50 55 60 65 70 75 80 85 90 95 100]
 	#define TAA_Color_Sampler_Size 0.55	//[0.2 0.25 0.3 0.35 0.4 0.45 0.5 0.55 0.6 0.65 0.7 0.75 0.8 0.85 0.9]
@@ -267,7 +269,7 @@ void main(){
 		colorIndex *= 0.125;
 
 		//if(texcoord.x < 0.5)
-		color += (color - colorIndex) * 0.025 * TAA_Sharpen_Factor * min(1.0, abs(254.0 - round(texture2D(gdepth, texcoord).z * 255.0)));
+		color += (color - colorIndex) * 0.0025 * TAA_Sharpen_Factor * min(1.0, abs(254.0 - round(texture2D(gdepth, texcoord).z * 255.0)));
 		color = clamp01(color);
 	#endif
 
@@ -317,22 +319,30 @@ void main(){
 	//color *= 2.0;
 
 	//color = color / (color + 0.679);
-	color = (color / (1.0 + getLum(color))) / (1.0 / (1.0 + getLum(color)));
-	color *= 3.0;
+	float brightness = 1.0 / Brightness;
+	color = (color / (0.01 + getLum(color))) / (brightness / (0.01 + getLum(color)));
+
+	//color *= 1.0 / (texture2D(gaux3, texcoord).ggg + 0.01) * 0.2;
+	//color *= 1.0 + pow5(getLum(texture2D(gaux2, texcoord).rgb)) * 5.0;
+	//color *= texture2D(gaux3, vec2(0.5)).x;
 
 	color = Uncharted2Tonemap(color, 1.0);
+
 	//color = ACESToneMapping(color, 1.0);
 
 	float lum = getLum(color);
-	color = clamp01(lum + (color - lum) * 1.04);
+	color = clamp01(lum + (color - lum) * 0.97);
 
 	//color += vec3(test);
 
 	color = L2rgb(color);
 
 	#ifdef RawOut
-		color = texture2D(gaux4, texcoord).rgb * 2.0;
+		color = texture2D(gaux4, texcoord).rgb;
 	#endif
+
+	//if(texcoord.x < 0.5) color = 1.0 / (texture2D(gaux3, texcoord).ggg + 0.05) * 0.05;
+
 /*
 	texcoord = texcoord * 2.0 - 1.0;
 	texcoord *= mix(1.0, length(texcoord), Screen_Bias);

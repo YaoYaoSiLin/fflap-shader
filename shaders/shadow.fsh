@@ -31,7 +31,11 @@ void main() {
 	//tex.rgb *= (1.0 - tex.a);
 
 	if(isWater > 0.5) {
-		tex = vec4(0.02, 0.02, 0.02, 0.06);
+		//tex = vec4(rgb2L(color.rgb), 0.04);
+    tex = vec4(0.02);
+
+
+
     //tex.a = 0.05;
 		//tex.rgb = vec3(1.0);
 	}

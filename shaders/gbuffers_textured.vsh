@@ -1,14 +1,16 @@
-#version 120
+#version 130
 
 #define Enabled_TAA
 
-varying vec2 texcoord;
-varying vec2 lmcoord;
+out float id;
 
-varying vec3 normal;
-varying vec3 vP;
+out vec2 texcoord;
+out vec2 lmcoord;
 
-varying vec4 color;
+out vec3 normal;
+out vec3 vP;
+
+out vec4 color;
 
 #define Taa_Support 1
 
@@ -16,6 +18,8 @@ varying vec4 color;
 #include "libs/taa.glsl"
 
 void main() {
+  id = 0.0;
+
   texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
   lmcoord  = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
 

@@ -16,6 +16,7 @@ uniform sampler2D gcolor;
 uniform sampler2D gdepth;
 uniform sampler2D gnormal;
 uniform sampler2D composite;
+uniform sampler2D gaux1;
 uniform sampler2D gaux2;
 uniform sampler2D gaux3;
 
@@ -48,8 +49,11 @@ uniform mat4 shadowProjection;
 
 in vec2 texcoord;
 
+in float fading;
 in vec3 sunLightingColorRaw;
 in vec3 skyLightingColorRaw;
+
+const bool gaux2MipmapEnabled = true;
 
 vec2 resolution = vec2(viewWidth, viewHeight);
 vec2 pixel      = 1.0 / vec2(viewWidth, viewHeight);
@@ -79,19 +83,31 @@ vec3 normalDecode(vec2 enc) {
 void main() {
   vec4 albedo = texture2D(gcolor, texcoord);
 
-  float id = round(texture2D(gdepth, texcoord).z * 255.0);
+  float skyLightMap = step(0.9, pow2(texture2D(gdepth, texcoord).y) * 4.0 - 0.01);
+
+  int id = int(round(texture2D(gdepth, texcoord).z * 255.0));
   //bool isSky = texture2D(gdepth, texcoord).z > 0.999;
-  bool isSky = texture2D(gaux2, texcoord).a < 0.001;
+  bool isSky = id == 255;
+  bool isPlants = id == 18 || id == 31 || id == 83;
   bool isTranslucentBlocks = albedo.a > 0.9;
-  bool isPlants = id == 18.0 || id == 31.0;
+  bool isWater = id == 8;
+  bool isParticles = id == 253;
 
   vec3 normal = normalDecode(texture2D(gnormal, texcoord).xy);
 
   float smoothness = texture2D(composite, texcoord).r;
   float metallic   = texture2D(composite, texcoord).g;
-  float emissive   = texture2D(composite, texcoord).b;
+  //float emissive   = texture2D(composite, texcoord).b;
   float roughness  = 1.0 - smoothness;
         roughness  = roughness * roughness;
+
+  float IOR = 1.0 + texture2D(composite, texcoord).b;
+        IOR += step(0.5, metallic) * 49.0 + 2.5 * float(!isTranslucentBlocks);
+
+  float ri = 1.000293;
+  float ro = IOR;
+  if(isEyeInWater == 1){ ri = 1.333; ro = 1.000293; }
+
   //float IOR = 1.000293;
   //if(isTranslucentBlocks){
   //  float r = 1.0 + emissive;
@@ -126,14 +142,14 @@ void main() {
   vec3 sP = mat3(gbufferModelViewInverse) * normalize(sunPosition);
 
   //if(length(vP.xyz) < 100.0 || metallic > 0.5 || isTranslucentBlocks){
-  if(!isSky){
+  if(!isSky && smoothness > 0.015){
     vec3 h = normalize(nrP - nvP);
 
     float ndoth = clamp01(dot(normal, h));
 
-    float vdoth = 1.0 - clamp01(dot(-nvP, h));
+    float vdoth = pow5(1.0 - clamp01(dot(-nvP, h)));
 
-    vec3 f = F(F0, pow5(vdoth));
+    vec3 f = F(F0, vdoth);
 
     float ndotl = clamp01(dot(nrP, normal));
     float ndotv = 1.0 - clamp01(dot(-nvP, normal));
@@ -145,32 +161,81 @@ void main() {
     float dither = bayer_32x32(texcoord, resolution);
     dither *= 1.0;
 
-    float r = clamp01(max(f.b, max(f.r, f.g)) * d);
-          r = 1.0 - clamp01(r / (1.0 + 4.0 * abs(dot(normal, -nvP)) * abs(dot(normal, nrP))) * 5.0);
+    #if Metal_Block_Reflection_Smoothness == 0
+    //float ra = max(f.r, max(f.g, f.b)) * d * g;
+    //      ra = 1.0 / (max(0.0, ra) / (4.0 * clamp01(dot(-nvP, normal))) * clamp01(dot(nrP, normal)));
+    #else
+    //float ra = 1.0 - ((min(f.b, min(f.r, f.g)) * clamp01(d * g) / (4.0 * clamp01(dot(-nvP, normal))) * clamp01(dot(nrP, normal)) + 1.0 )* 5.0);
+    //float ra = 1.0 - ((clamp01(max(f.b, max(f.r, f.g)) * d * g) / (4.0 * clamp01(dot(-nvP, normal))) * clamp01(dot(nrP, normal)) + 1.0) * 5.0);
+    #endif
 
-    vec3 skySpecularReflection = L2rgb(CalculateSky(nrP, sP, cameraPosition.y, 0.5));
-         //skySpecularReflection = L2rgb(mix(skySpecularReflection, skyLightingColorRaw + sunLightingColorRaw * 0.1, r));
+    float s = (pow2(ro) * (1.0 - vdoth) * g * d) / pow2((ri) * clamp01(pow2(dot(-nvP, h)) + (ro) * clamp01(dot(nrP, h))));
+    float sScreen = clamp01(1.0 / (s + 0.001) * 0.05);
+          s = clamp01(1.0 / (s + 0.001));
+
+    //vec3 noColor = color;
+
+    float fMax = max(f.r, max(f.g, f.b));
+
+    vec3 skySpecularReflection = CalculateSky(nrP, sP, cameraPosition.y, 0.5);
+         skySpecularReflection = CalculateAtmosphericScattering(skySpecularReflection, -(mat3(gbufferModelViewInverse) * nrP).y + 0.15);
+         skySpecularReflection = L2rgb(skySpecularReflection);
+         skySpecularReflection = mix(skySpecularReflection, color, max(1.0 - skyLightMap, s));
 
     vec4 ssR = vec4(0.0);
-    //if((!isPlants && length(vP.xyz) < 100.0) || isTranslucentBlocks){
-      ssR = raytrace(vP.xyz, rP, normal, dither * 0.01, r);
-      //ssR.rgb = rgb2L(ssR.rgb);
-    //  if(!isTranslucentBlocks) ssR.a *= clamp01((-length(vP.xyz) + 100.0 - 16.0) / 32.0);
-    //}
+    if((!isParticles && !isPlants && length(vP.xyz) < 64.0 && smoothness > 0.21) || isWater){
+      ssR = raytrace(vP.xyz, rP, normal, dither * 0.01, sScreen);
+      ssR.rgb = mix(ssR.rgb, skySpecularReflection, s);
+    }
 
-    vec3 specularReflection = mix(skySpecularReflection, ssR.rgb, ssR.a);
+    //skySpecularReflection *= clamp01(pow2(skyLightMap) * 4.0 - 0.01);
+    //skySpecularReflection *= 1.0 - g;
+    //ssR.a = mix(1.0, ssR.a, clamp01(pow2(skyLightMap) * 4.0 - 0.01));
 
-    //color = vec3(0.0);
-    //color = mix(color, specularReflection, f * specularity);
-    color += specularReflection * f * specularity;
+    vec3 specularReflection = mix(skySpecularReflection, ssR.rgb, max(ssR.a, 1.0 - skyLightMap));
+         //specularReflection = mix(mix(color, skySpecularReflection, clamp01(g * d) * skyLightMap), specularReflection, clamp01(g * d));
+
+    //color = mix(color, skySpecularReflection, clamp01(g * d) * skyLightMap);
+
+    color += specularReflection * clamp01(pow3(g * d)) * f;
+
+    //color = vec3(minComponent(albedo.rgb));
+
     //color = ssR.rgb;
-    //color = vec3(clamp01(-dot((nvP), normal)));
   }
+
+  //color = texture2D(composite, texcoord).rgb;
+
+  //color = albedo.rgb * 255.0;
+
+  //color = texture2D(composite, texcoord).rgb;
+
+  //color = vec3(texture2D(gaux3, texcoord).r);
+  //color = mix(color, texture2D(gaux2, texcoord).rgb, texture2D(gaux3, texcoord).r);
+
+  color = mix(color, texture2D(gaux2, texcoord).rgb, texture2D(gaux1, texcoord).a);
+
+  //color = vec3(maxComponent(albedo.rgb) - minComponent(albedo.rgb));
+
+  //float cc = maxComponent(albedo.rgb) - minComponent(albedo.rgb);
+
+  //color = vec3(clamp01(maxComponent(albedo.rgb - vec3(0.858, 0.827, 0.623) * 0.5)));
+
+  //color.rgb = vec3(min(color.r, min(color.g, color.b)));
+
+  //color = vec3(clamp01(texture2D(gaux3, texcoord).x * 1024.0 - length(vP.xyz))) * 0.1;
+  //color = vec3(length(nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, texture2D(gaux3, texcoord).x) * 2.0 - 1.0)))) * 0.1;
+  //if(texture)
+
+  //color = albedo.rgb;
+
+  //color = texture2D(gaux3, texcoord).rgb;
+
+  //color = vec3(smoothness, metallic, 0.0);
 
   //color = L2rgb(color);
 
-/* DRAWBUFFERS:56 */
-  gl_FragData[0] = vec4(color, 1.0);
-  gl_FragData[1] = vec4(color, 1.0);
+/* DRAWBUFFERS:5 */
+  gl_FragData[0] = vec4(color, 0.0);
   //gl_FragData[1] = solidBlockSpecularReflection;
 }

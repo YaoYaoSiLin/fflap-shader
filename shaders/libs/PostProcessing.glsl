@@ -25,32 +25,27 @@ const float bloomWeights[9] = float[9](0.0541, 0.2326, 0.0541,
                                        0.2326, 0.4806, 0.2326,
                                        0.0541, 0.2326, 0.0541);
 */
+
+vec2 bloomSamplOffset[8] = vec2[8](vec2(0.0),
+                                   vec2(0.508, 0.0),
+                                   vec2(0.762, 0.0),
+                                   vec2(0.891, 0.0),
+                                   vec2(0.9575, 0.0),
+                                   vec2(0.0, 0.508),
+                                   vec2(0.0, 0.508),
+                                   vec2(0.0, 0.508)
+                                   );
+
 #if Stage == Bloom && defined(bloomSampler) && defined(Enabled_Bloom)
 //bloom sampler
-  vec3 GetBloom(in float x, in vec2 coord, in vec2 offset, inout bool alive, in float dither){
+  vec3 GetBloom(in float x, in vec2 coord, in vec2 offset, in mat2 rotate){
     vec3 bloom = vec3(0.0);
-  	float r = 1.0;
 
-    float lod = exp2(Bloom_First_Steps + x);
+    float lod = exp2(1.0 + x);
 
-    //dither *= lod;
-    //dither *= 1.0;
+  	vec2 bloomCoord = (coord - offset + 0.0002) * lod;
 
-    float lastSalce = exp2(x + Bloom_First_Steps - 1.0);
-    float fristSampleScale = exp2(1);
-
-    coord -= offset;
-
-  	vec2 bloomCoord = (coord + vec2((1.0 / lastSalce) * 1.1 - 1.1, 0.0) * Bloom_Sample_Scale) * lod / Bloom_Sample_Scale;
-
-    if(((1.0 - pixel.x) + ((1.0 / lastSalce) * 1.1 - 1.1) * Bloom_Sample_Scale) * lod / Bloom_Sample_Scale < 1.0){
-      //return vec3(coord, 0.0);
-      bloomCoord = (coord - (offset * 2.0 + vec2(-(1.0 / fristSampleScale), 1.0 / fristSampleScale) - vec2((1.0 / lastSalce) * 1.1 - 1.1, 0.0)) * Bloom_Sample_Scale) * lod / Bloom_Sample_Scale;
-    }
-
-  	//if(bloomCoord == clamp(bloomCoord, vec2(0.0), vec2(1.0))){
-  	if(bloomCoord.x > -0.002 && bloomCoord.x < 1.002
-  	&& bloomCoord.y > -0.002 && bloomCoord.y < 1.002){
+  	if(bloomCoord.x > -0.004 && bloomCoord.x < 1.004 && bloomCoord.y > -0.004 && bloomCoord.y < 1.004){
 
       float weights = 0.0;
 
@@ -58,24 +53,22 @@ const float bloomWeights[9] = float[9](0.0541, 0.2326, 0.0541,
 
       for(float i = -1.0; i <= 1.0; i += 1.0){
     		for(float j = -1.0; j <= 1.0; j += 1.0){
-  				vec2 offsets = (vec2(i, j));
-          float r = (1.0 + float(rounds) * 2.0 * 3.14159) / 9.0 + dither;
+  				vec2 offsets = vec2(i, j);
+          //float r = (1.0 + float(rounds) * 2.0 * 3.14159) / 9.0;
 
           float weight = gaussianBlurWeights(offsets);
-          offsets += vec2(cos(r), sin(r)) * (8.0 + lod) * 0.5;
+          //      weight = 1.0;
+          //offsets += vec2(cos(r), sin(r)) * (8.0 + lod) * 0.4;
 
-  				bloom += rgb2L(texture2DLod(bloomSampler, bloomCoord + offsets * pixel, 0.0).rgb) * weight;//5 + lod * 0.12
+          //offsets -= offsets * (rotate) * lod * 0.0625;
+
+  				bloom += (texture2DLod(bloomSampler, bloomCoord + offsets * pixel * lod, lod * 0.24).rgb * weight);
           weights += weight;
-
-  				rounds++;
+          //rounds++;
   			}
   		}
 
-      if(weights > 0.0)
       bloom /= weights;
-
-  		alive = true;
-  		//r = lod;
   	}
 
   	return bloom;
@@ -83,47 +76,21 @@ const float bloomWeights[9] = float[9](0.0541, 0.2326, 0.0541,
 
   vec4 CalculateBloomSampler(in vec2 coord) {
     vec3 bloom = vec3(0.0);
-    bool alive = false;
 
-    //#define DEBUG_Bloom
-    //  #define DEBUG_Bloom_ScreenOverScale 4.0
-    //  #define DEBUG_Bloom_ScreenOverScale_Line
-    //    #define DEBUG_Bloom_ScreenOverScale_Scale 0.001
-    //    #define DEBUG_Bloom_ScreenOverScale_LineColor_R 1.0
-    //    #define DEBUG_Bloom_ScreenOverScale_LineColor_G 1.0
-    //    #define DEBUG_Bloom_ScreenOverScale_LineColor_B 1.0
+    float dither = bayer_32x32(coord, resolution) * 2.0 * Pi;
 
-    //#if defined(DEBUG_Bloom) && defined(DEBUG_Bloom_ScreenOverScale)
-    //coord = coord * 2.0 - 1.0;
-    //coord *= DEBUG_Bloom_ScreenOverScale;
-    //coord = coord * 0.5 + 0.5;
-    //#endif
+    mat4 rotate = mat4(cos(dither), -sin(dither), 0.0, 0.0,
+                       sin(dither),  cos(dither), 0.0, 0.0,
+                       0.0, 0.0, 1.0, 0.0,
+                       0.0, 0.0, 0.0, 1.0);
 
-    float dither = bayer_32x32(coord, resolution);
+    coord -= 0.004 * vec2(1.0, aspectRatio);
 
     for(int i = 0; i < int(Bloom_Steps); i++) {
-      //if(alive) break;
-  		bloom += GetBloom(float(i), coord, vec2(0.002), alive, dither);
+  		bloom += GetBloom(float(i), coord, bloomSamplOffset[i], mat2(rotate));
   	}
 
-    //bloom = GetBloom(1.0, coord, vec2(0.002), alive);
-
-    //#if defined(DEBUG_Bloom) && defined(DEBUG_Bloom_ScreenOverScale_Line)
-    //if((coord.x > 1.0 && coord.x < 1.0 + DEBUG_Bloom_ScreenOverScale_Scale)
-    //|| (coord.x < 0.0 && coord.x > 0.0 - DEBUG_Bloom_ScreenOverScale_Scale)
-    //|| (coord.y > 1.0 && coord.y < 1.0 + DEBUG_Bloom_ScreenOverScale_Scale * aspectRatio)
-    //|| (coord.y < 0.0 && coord.y > 0.0 - DEBUG_Bloom_ScreenOverScale_Scale * aspectRatio)
-    //){
-      //bloom.xy += coord * 0.3;
-    //  bloom = vec3(DEBUG_Bloom_ScreenOverScale_LineColor_R, DEBUG_Bloom_ScreenOverScale_LineColor_G, DEBUG_Bloom_ScreenOverScale_LineColor_B);
-    //}
-    //#endif
-
-    //if(!alive){
-    //  bloom = vec3(coord, 0.0);
-    //}
-
-    return vec4(L2rgb(bloom), float(alive));
+    return vec4(bloom, 1.0);
   }
 //end bloom sampler
 #endif
@@ -142,6 +109,7 @@ const float bloomWeights[9] = float[9](0.0541, 0.2326, 0.0541,
 
   vec4 BicubicTexture(in sampler2D tex, in vec2 coord) {
   	coord *= resolution;
+    //coord = floor(coord + 0.5);
 
   	float fx = fract(coord.x);
     float fy = fract(coord.y);
@@ -170,32 +138,20 @@ const float bloomWeights[9] = float[9](0.0541, 0.2326, 0.0541,
   }
 
   void CalculateBloom(inout vec3 color, in vec2 coord){
+    vec2 offset = vec2(0.002);
     vec3 bloom = vec3(0.0);
 
-    vec2 offset = vec2(0.002);
+    float weights = 0.0;
 
     for(int i = 0; i < int(Bloom_Steps); i++){
-      float lod = exp2(Bloom_First_Steps + i) / Bloom_Sample_Scale;
+      float lod = exp2(1.0 + i);
 
-      float lastSalce = exp2(i + Bloom_First_Steps - 1.0);
-      float fristSampleScale = exp2(1);
+      //vec2 bloomCoord = (coord / lod) - (vec2((1.0 / lastSalce) * 1.1 - 1.1, 0.0)) + offset;
+      vec2 bloomCoord = (coord) / lod + bloomSamplOffset[i] + 0.004 * vec2(1.0, aspectRatio);
 
-      //vec2 bloomCoord = (coord + vec2((1.0 / lastSalce) * 1.1 - 1.1, 0.0) * Bloom_Sample_Scale) * lod / Bloom_Sample_Scale;
-      //vec2 bloomCoord = (coord / x * Bloom_Sample_Scale) - vec2((1.0 / lastSalce) * 1.1 - 1.1, 0.0) / Bloom_Sample_Scale;
-      //vec2 bloomCoord = ((coord) / x * Bloom_Sample_Scale) + offset;
-      //vec2 bloomCoord = (coord + vec2((1.0 / lastSalce) * 1.1 - 1.1, 0.0) * Bloom_Sample_Scale) * lod / Bloom_Sample_Scale;
-      vec2 bloomCoord = (coord / lod) - (vec2((1.0 / lastSalce) * 1.1 - 1.1, 0.0)) + offset;
-
-      if(((1.0 - pixel.x) + ((1.0 / lastSalce) * 1.1 - 1.1) * Bloom_Sample_Scale) * lod / Bloom_Sample_Scale < 1.0){
-        //return vec3(coord, 0.0);
-        //bloomCoord = (coord - (offset * 2.0 + vec2(-(1.0 / fristSampleScale), 1.0 / fristSampleScale) - vec2((1.0 / lastSalce) * 1.1 - 1.1, 0.0)) * Bloom_Sample_Scale) * lod / Bloom_Sample_Scale;
-        //bloomCoord = (coord / lod) + offset * 3.0 + vec2((1.0 / fristSampleScale), (1.0 / fristSampleScale)) + vec2((1.0 / lastSalce) * 1.1 - 1.1, 0.0);
-        //bloomCoord = (coord / lod) + (offset * 2.0 + vec2(-(1.0 / fristSampleScale), 1.0 / fristSampleScale) - vec2((1.0 / lastSalce) * 1.1 - 1.1, 0.0)) * Bloom_Sample_Scale + offset;
-        // + offset * 3.0 + vec2((1.0 / fristSampleScale), -(1.0 / fristSampleScale)) + vec2((1.0 / lastSalce) * 1.1 - 1.1, 0.0)
-        bloomCoord = (coord / lod) + (offset * 2.0 + vec2(-(1.0 / fristSampleScale), 1.0 / fristSampleScale) - vec2((1.0 / lastSalce) * 1.1 - 1.1, 0.0)) * Bloom_Sample_Scale + offset;
-      }
-
-      bloom += rgb2L(BicubicTexture(bloomSampler, bloomCoord).rgb) * (1.0 + gaussianBlurWeights(float(i)));
+      float weight = gaussianBlurWeights(float(i));
+      bloom += BicubicTexture(bloomSampler, bloomCoord).rgb / (1.0 + weight);
+      weights += weight;
 
       //if(((1.0 - pixel.x) + ((1.0 / lastSalce) * 1.1 - 1.1) * Bloom_Sample_Scale) * lod / Bloom_Sample_Scale < 1.0){
       //  //return vec3(coord, 0.0);
@@ -204,7 +160,48 @@ const float bloomWeights[9] = float[9](0.0541, 0.2326, 0.0541,
 
     }
 
+    //bloom *= overRange;
+    //bloom /= weights;
+
+    //bloom = texture2D(bloomSampler, coord).rgb * 16.0;
+
+    bloom = rgb2L(bloom) * overRange * overRange;
+    //bloom *= pow(overRange, 2.2);
+
+    //if(isEyeInWater == 1) color = mix(bloom, color, abs(getLum(bloom) - getLum(color)));
+    //if(coord.x < 0.5) color = rgb2L(BicubicTexture(bloomSampler, coord).rgb * );
+
     //bloom /= Bloom_Steps;
+
+    //color = bloom;
+
+    float lum = 1.0 + dot(bloom, vec3(0.7874, 0.2848, 0.9278));
+
+    color += bloom * 0.333 * lum * 0.02;
+
+    //color = bloom;
+
+    //color = BicubicTexture(colortex, coord).rgb;
+
+    //bloom *= lum;
+
+    //color += bloom * overRange * 100.0 * lum;
+
+    //bloom *= lum;
+    //color += clamp01(bloom + (bloom - color)) * lum * 0.0333;
+
+    //color += clamp01(bloom - color) * 0.033 * lum;
+
+
+    //color = texture2D(bloomSampler, coord).rgb;
+
+    //bloom *= lum * 75.0;
+    //color += clamp01(bloom - color) * lum * 7.0;
+
+    //color += clamp01(bloom + (bloom - color) * 0.75);
+
+
+    //color += bloom + clamp(bloom - color, -bloom, bloom);
 
     //color *= 3.0;
 
@@ -213,7 +210,7 @@ const float bloomWeights[9] = float[9](0.0541, 0.2326, 0.0541,
     //color = mix(color, bloom * 65535, 0.0007);
     //color = rgb2L(BicubicTexture(bloomSampler, coord).rgb) * 65535 * 0.01;
     //color += bloom * (1.0 + clamp01(getLum(color * 10.0 - bloom))) * 255.;
-    color = bloom;
+    //color += bloom * 4.0;
     //color = rgb2L(BicubicTexture(bloomSampler, coord).rgb) * 65535.0;
 
     //color += mix(bloom, color, 0.000001);

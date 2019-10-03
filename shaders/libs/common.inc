@@ -1,3 +1,5 @@
+#define INCLUDE_COMMON
+
 #define Solid       1
 #define Particels   2
 #define Deferred    4
@@ -8,6 +10,23 @@
 #define Bloom       9
 #define PostProcessing 10
 #define Final       11
+
+#define overRange 38.0  //hdr
+
+#define OFF 0
+#define Low 1
+#define Medium 2
+#define High 3
+
+#define Checker_Board 1
+#define Render_Scale 2
+
+#define Simple_Filter 0
+#define Temporal 1
+
+#define auto 0
+#define default 256
+#define render_quality MC_RENDER_QUALITY
 
 const float Pi = 3.14159;
 const float e = 2.71828;
@@ -61,7 +80,6 @@ float pow2(in float x){
   return x * x;
 }
 
-
 float pow3(in float x){
   return x * x * x;
 }
@@ -76,4 +94,29 @@ float minComponent( vec3 a ) {
 
 float maxComponent( vec3 a ) {
     return max(a.x, max(a.y, a.z) );
+}
+
+#ifdef Gaussian_Blur
+  float gaussianBlurWeights(in float offset){
+    float o = 0.83;
+
+    o *= o;
+    offset *= offset;
+
+    return (1/(sqrt(2*Pi*o)))*exp(-(offset)/(2*o));
+  }
+
+  float gaussianBlurWeights(in vec2 offset){
+    float o = 0.83;
+
+    o *= o;
+    offset *= offset;
+
+    return (1.0f/(2.0f*Pi*o))*exp(-((offset.x+offset.y)/(2.0f*o)));
+  }
+#endif
+
+vec3 saturation(in vec3 color, in float x){
+  float lum = dot03(color);
+  return (lum + (color - lum) * x);
 }

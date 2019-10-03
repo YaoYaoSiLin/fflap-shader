@@ -3,15 +3,20 @@
 /*
 */
 
-#define Continuum2_Texture_Format
+//#define Continuum2_Texture_Format
+
+uniform sampler2D gaux1;
 
 uniform sampler2D texture;
 uniform sampler2D normals;
 uniform sampler2D specular;
 
-uniform vec3 upPosition;
+uniform mat4 gbufferProjectionInverse;
 
-uniform mat4 gbufferModelView;
+uniform float viewWidth;
+uniform float viewHeight;
+
+uniform vec3 upPosition;
 
 in float id;
 
@@ -33,28 +38,39 @@ vec2 normalEncode(vec3 n) {
 
 void main() {
   vec4 albedo = texture2D(texture, texcoord) * color;
-       albedo.a = step(0.001, albedo.a);
 
-  if(albedo.a < 0.005 || length(vP) > max(32.0, far * 0.5)) discard; //disable sky texture & low alpha pixel
+  if(albedo.a < 0.05 || length(vP) > max(32.0, far)) discard; //disable sky texture & low alpha pixel
+  albedo.a = 1.0;
+
+  vec2 screenCoord = gl_FragCoord.xy / vec2(viewWidth, viewHeight);
+
+  //float depth = texture2D(gaux1, screenCoord).a;
+  //vec3 particlesPosition = nvec3(gbufferProjectionInverse * nvec4(vec3(screenCoord, depth) * 2.0 - 1.0));
+  //float particleDistance = length(particlesPosition);
+  //if(length(vP) > particleDistance && depth > 0.0) discard;
 
   vec4 speculars = texture2D(specular, texcoord);
        speculars.a = step(0.001, speculars.a + albedo.a);
 
   #ifdef Continuum2_Texture_Format
-    speculars = vec4(speculars.b, speculars.r, 0.0, speculars.a);
+    speculars = vec4(speculars.b, speculars.r, speculars.g, speculars.a);
   #endif
 
-  speculars.b = 0.0;
+  if(speculars.r == speculars.b) speculars.rgb = vec3(speculars.r, 0.0, 0.0);
+
+
+  speculars.b *= 0.06;
   speculars.r = clamp(speculars.r, 0.00001, 0.009);
   speculars.a = 1.0;
 
-  #if MC_VERSION > 11202
-  speculars = vec4(0.001, 0.0, 0.0, 1.0);
-  #endif
+  //#if MC_VERSION > 11202
+  //speculars = vec4(0.001, 0.0, 0.0, 1.0);
+  //#endif
 
-/* DRAWBUFFERS:0123 */
+/* DRAWBUFFERS:01234 */
   gl_FragData[0] = albedo;
   gl_FragData[1] = vec4(lmcoord, 253.0 / 255.0, 1.0);
-  gl_FragData[2] = vec4(normalEncode(normalize(vP.xyz * vec3(1.0, 0.0, -1.0))), 1.0, 1.0);
+  gl_FragData[2] = vec4(vec2(0.0), 1.0, 0.0);
   gl_FragData[3] = speculars;
+  gl_FragData[4] = vec4(0.0, 0.0, 0.0, gl_FragCoord.z);
 }

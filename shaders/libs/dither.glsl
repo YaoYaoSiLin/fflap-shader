@@ -34,3 +34,18 @@ float hash(vec2 p) {
 	p3 += dot(p3, p3.yzx + 19.19);
 	return fract((p3.x + p3.y) * p3.z);
 }
+
+//The Unreasonable Effectiveness of Quasirandom Sequences | Extreme Learning
+float t(in float z){
+  if(0.0 <= z && z < 0.5) return 2.0*z;
+  if(0.5 <= z && z < 1.0) return 2.0 - 2.0*z;
+}
+
+float R2sq(in vec2 coord){
+  float a1 = 1.0 / 0.75487766624669276;
+  float a2 = 1.0 / 0.569840290998;
+
+  //coord = floor(coord);
+
+  return t(mod(coord.x * a1 + coord.y * a2, 1));
+}

@@ -1,6 +1,6 @@
-#version 120
+#version 130
 
-#define Continuum2_Texture_Format
+//#define Continuum2_Texture_Format
 
 uniform sampler2D texture;
 uniform sampler2D normals;
@@ -12,15 +12,15 @@ uniform mat4 gbufferProjection;
 
 uniform float wetness;
 
-varying vec2 texcoord;
-varying vec2 lmcoord;
+in vec2 texcoord;
+in vec2 lmcoord;
 
-varying vec3 normal;
-varying vec3 tangent;
-varying vec3 binormal;
-varying vec3 vP;
+in vec3 normal;
+in vec3 tangent;
+in vec3 binormal;
+in vec3 vP;
 
-varying vec4 color;
+in vec4 color;
 
 vec2 normalEncode(vec3 n) {
     vec2 enc = normalize(n.xy) * (sqrt(-n.z*0.5+0.5));
@@ -30,36 +30,40 @@ vec2 normalEncode(vec3 n) {
 
 void main() {
   vec4 albedo = texture2D(texture, texcoord) * color;
-  albedo.a = step(0.001, albedo.a);
-  if(albedo.a < 0.001) discard;
-  //else albedo.a = 1.0;
+
+  if(albedo.a < 0.05) discard;
+  albedo.a = 1.0;
 
   vec4 speculars = texture2D(specular, texcoord);
 
   #ifdef Continuum2_Texture_Format
-  speculars = vec4(speculars.b, speculars.r, 0.0, speculars.a);
+  speculars = vec4(speculars.b, speculars.r, speculars.g, speculars.a);
   #endif
+
+  if(speculars.r == speculars.b) speculars.rgb = vec3(speculars.r, 0.0, 0.0);
+  speculars.b *= 0.06;
 
   //#if MC_VERSION > 11202
   //speculars = vec4(0.001, 0.0, 0.0, 1.0);
   //#endif
 
-  speculars.b = 0.0;
-
-  speculars.r = clamp(speculars.r, 0.00001, 0.999);
+  speculars.r = clamp(speculars.r, 0.001, 0.999);
+  speculars.b *= 0.12;
   speculars.a = 1.0;
 
   mat3 tbnMatrix = mat3(tangent, binormal, normal);
 
-  vec3 normalTexture = texture2D(normals, texcoord).xyz * 2.0 - 1.0;
-       normalTexture.xy *= step(0.0, -dot(normalize(vP), normalize(tbnMatrix * normalTexture)));
-       normalTexture = normalize(tbnMatrix * normalTexture);
+  vec3 surfaceNormal = texture2D(normals, texcoord).xyz * 2.0 - 1.0;
+       surfaceNormal = normalize(tbnMatrix * surfaceNormal);
+  if(-0.15 < dot(normalize(vP), surfaceNormal)) surfaceNormal = normal;
+  if(dot(normalize(vP), normal) > 0.0) surfaceNormal = -surfaceNormal;
+  surfaceNormal.xy = normalEncode(surfaceNormal);
 
   //albedo.rgb *= lmcoord.y;
 
   /* DRAWBUFFERS:0123 */
   gl_FragData[0] = albedo;
   gl_FragData[1] = vec4(lmcoord, 254.0 / 255.0, 1.0);
-  gl_FragData[2] = vec4(normalEncode(normalTexture), 1.0, 1.0);
+  gl_FragData[2] = vec4(surfaceNormal.xy, 1.0, 1.0);
   gl_FragData[3] = speculars;
 }

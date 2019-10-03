@@ -1,21 +1,14 @@
 #version 120
 
 uniform sampler2D texture;
-uniform sampler2D gaux1;
-uniform sampler2D gaux3;
+uniform sampler2D specular;
 
-uniform mat4 gbufferProjection;
+in vec2 texcoord;
+in vec2 lmcoord;
 
-uniform float far;
-uniform float near;
+in vec3 normal;
 
-varying vec2 texcoord;
-varying vec2 lmcoord;
-
-varying vec3 vP;
-varying vec3 normal;
-
-varying vec4 color;
+in vec4 color;
 
 vec3 nvec3(vec4 pos) {
     return pos.xyz / pos.w;
@@ -32,15 +25,25 @@ vec2 normalEncode(vec3 n) {
 }
 
 void main() {
-  vec4 tex = texture2D(texture, texcoord);
-       tex *= color;
+  vec4 albedo = texture2D(texture, texcoord);
+       albedo *= color;
 
-  if(tex.a < 0.001) discard;
+  if(albedo.a < 0.05) discard;
 
-/* DRAWBUFFERS:01235 */
-  gl_FragData[0] = tex;
-  gl_FragData[1] = vec4(vec2(0.0), 0.0, 1.0);
-  gl_FragData[2] = vec4(vec2(0.0), 0.0, 1.0);
-  gl_FragData[3] = vec4(0.0, 0.0, max(tex.r, max(tex.g, tex.b)) - min(tex.r, min(tex.g, tex.b)), 1.0);
-  gl_FragData[4] = vec4(0.0, 0.0, 1.0, 1.0);
+  vec4 speculars = texture2D(specular, texcoord);
+
+  #ifdef Continuum2_Texture_Format
+  speculars = vec4(speculars.b, speculars.r, 0.0, speculars.a);
+  #endif
+
+  //#if MC_VERSION > 11202
+  //speculars = vec4(0.001, 0.0, 0.0, 1.0);
+  //#endif
+
+  speculars.r = clamp(speculars.r, 0.001, 0.999);
+  speculars.b = 0.12;
+
+/* DRAWBUFFERS:03 */
+  gl_FragData[0] = albedo;
+  gl_FragData[1] = speculars;
 }

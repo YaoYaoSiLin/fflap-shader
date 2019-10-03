@@ -26,8 +26,8 @@ void main() {
   vec3 wP = mat3(gbufferModelViewInverse) * vP;
 
   fading = CalculateSunLightFading(normalize(wP.xyz), sP);
-  sunLightingColorRaw = CalculateSky(normalize(sunPosition), sP, 63.0, 0.375);
-  skyLightingColorRaw = CalculateSky(normalize(upPosition), sP, 63.0, 0.5);
+  sunLightingColorRaw = CalculateSky(normalize(sunPosition), sP, 63.0, 0.7);
+  skyLightingColorRaw = CalculateSky(normalize(upPosition), sP, 63.0, 1.0);
 
   texcoord = gl_MultiTexCoord0.st;
 

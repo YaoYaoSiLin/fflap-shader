@@ -1,6 +1,16 @@
-#version 120
+#version 130
 
 #define SHADOW_MAP_BIAS 0.9
+
+#define disable -255
+#define normal_biomes 0
+#define swamp 6
+#define frozen_ocean_and_river 10
+#define warm_ocean 44
+#define lukewarm_ocean 45
+#define cold_ocean 46
+
+#define Water_Color_Test disable //[disable normal_biomes swamp frozen_ocean_and_river warm_ocean lukewarm_ocean cold_ocean]
 
 const float shadowDistance = 140.0;
 
@@ -14,27 +24,51 @@ uniform float far;
 
 uniform mat4 gbufferModelView;
 
-varying float shadowPass;
-varying float isWater;
+out float shadowPass;
+out float isWater;
+out float blockDepth;
 
-varying vec2 texcoord;
-varying vec2 lmcoord;
+out vec2 texcoord;
+out vec2 lmcoord;
 
-varying vec3 normal;
-varying vec3 vP;
+out vec3 normal;
+out vec3 vP;
 
-varying vec4 color;
+out vec4 color;
 
 void main() {
 	shadowPass = 0.0;
+	isWater = 0.0;
+
+	blockDepth = 1.0;
+
 	if(mc_Entity.x == 95 || mc_Entity.x == 160 || mc_Entity.x == 79 || mc_Entity.x == 20 || mc_Entity.x == 165){
-	//if(mc_Entity.y == 3){
 		shadowPass = 1.0;
 	}
 
-	isWater = 0.0;
+	if(mc_Entity.x == 160 || mc_Entity.x == 106){
+		blockDepth = 0.125;
+	}
+
 	if(mc_Entity.x == 8){
 		isWater = 1.0;
+		blockDepth = -1.0;
+
+		#if Water_Color_Test > disable
+			#if Water_Color_Test == normal_biomes
+				color.rgb = vec3(0.247 , 0.4627, 0.8941);
+			#elif Water_Color_Test == swamp
+				color.rgb = vec3(0.3803, 0.4823, 0.3921);
+			#elif Water_Color_Test == frozen_ocean_and_river
+				color.rgb = vec3(0.2235, 0.2196, 0.7882);
+			#elif Water_Color_Test == warm_ocean
+				color.rgb = vec3(0.2627, 0.8352, 0.9333);
+			#elif Water_Color_Test == lukewarm_ocean
+				color.rgb = vec3(0.2705, 0.6784, 0.949 );
+			#elif Water_Color_Test == cold_ocean
+				color.rgb = vec3(0.2392, 0.3411, 0.8392);
+			#endif
+		#endif
 	}
 
 	texcoord = gl_MultiTexCoord0.xy;
@@ -42,7 +76,7 @@ void main() {
 
 	color = gl_Color;
 
-	normal = normalize(gl_NormalMatrix * gl_Normal);
+	normal = mat3(gbufferModelView) * normalize(gl_NormalMatrix * gl_Normal);
 
 	bool leaves = mc_Entity.x == 18;
 
@@ -55,6 +89,8 @@ void main() {
   //bool farm = mc_Entity.x == 59 || mc_Entity.x == 141 || mc_Entity.x == 142 || mc_Entity.x == 207;
 
 	vP = (gl_ModelViewMatrix * gl_Vertex).xyz;
+	//vP.xy /= (mix(1.0, length(vP.xy), SHADOW_MAP_BIAS) / 0.95);
+	//vP.z /= max(far / shadowDistance, 1.0);
 
 	vec4 position = gl_Vertex;
 
@@ -101,5 +137,4 @@ void main() {
 	position.z /= max(1.0, far / shadowDistance);
 
 	gl_Position = position;
-	//gl_Position.z +
 }

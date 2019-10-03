@@ -1,241 +1,263 @@
 #version 130
 
-#extension GL_EXT_gpu_shader4 : require
-#extension GL_EXT_gpu_shader5 : require
+#extension GL_ARB_shader_texture_lod : require
 
-#define SHADOW_MAP_BIAS 0.9
-
-#define Enabled_TAA
-
-#define SpecularityReflectionPower 2.0            //[1.0 1.2 1.5 1.75 2.0 2.25 2.5 2.75 3.0]
-#define Continuum2_Texture_Format
-
-const int noiseTextureResolution = 64;
-
-uniform sampler2D gcolor;
 uniform sampler2D gdepth;
-uniform sampler2D gnormal;
 uniform sampler2D composite;
 uniform sampler2D gaux1;
 uniform sampler2D gaux2;
 uniform sampler2D gaux3;
 
 uniform sampler2D depthtex0;
-uniform sampler2D depthtex1;
-
-uniform sampler2D shadowtex0;
-uniform sampler2D shadowtex1;
-uniform sampler2D shadowcolor0;
-uniform sampler2D shadowcolor1;
-
-uniform float viewWidth;
-uniform float viewHeight;
-uniform float rainStrength;
-
-uniform int frameCounter;
-uniform int isEyeInWater;
-
-uniform vec3 cameraPosition;
-uniform vec3 sunPosition;
-uniform vec3 upPosition;
-uniform vec3 shadowLightPosition;
 
 uniform mat4 gbufferProjectionInverse;
 uniform mat4 gbufferProjection;
 uniform mat4 gbufferModelViewInverse;
 uniform mat4 gbufferModelView;
-uniform mat4 shadowModelView;
-uniform mat4 shadowProjection;
+uniform mat4 gbufferPreviousModelView;
+uniform mat4 gbufferPreviousProjection;
+
+uniform float viewWidth;
+uniform float viewHeight;
+uniform float aspectRatio;
+
+uniform int frameCounter;
+uniform int isEyeInWater;
+
+uniform vec3 cameraPosition;
+uniform vec3 previousCameraPosition;
 
 in vec2 texcoord;
 
-in float fading;
-in vec3 sunLightingColorRaw;
-in vec3 skyLightingColorRaw;
+in vec4 waterColor;
 
-const bool gaux2MipmapEnabled = true;
+const bool gaux3Clear = false;
 
 vec2 resolution = vec2(viewWidth, viewHeight);
-vec2 pixel      = 1.0 / vec2(viewWidth, viewHeight);
+vec2 pixel = 1.0 / resolution;
 
 #include "libs/common.inc"
-#include "libs/dither.glsl"
 #include "libs/jittering.glsl"
 
-#define Stage ScreenReflection
-#define CalculateHightLight 1
-#define depthOpaque depthtex0
-#define reflectionSampler gaux2
-//#define skyReflectionSampler gaux3
+#define Reflection_Scale Medium                 //[Low Medium High]
+  #define Reflection_Scale_Type Checker_Board   //[Checker_Board Render_Scale]
+  #define Reflection_Filter     Temporal        //[Simple_Filter Temporal]
 
-#include "libs/brdf.glsl"
-#include "libs/atmospheric.glsl"
-#include "libs/specular.glsl"
+#if Reflection_Scale == Low
+  #define reflection_resolution_scale 4
+#elif Reflection_Scale == Medium
+  #define reflection_resolution_scale 2
+#elif Reflection_Scale == High
+  #define reflection_resolution_scale 1
+#endif
 
-vec3 normalDecode(vec2 enc) {
-    vec4 nn = vec4(2.0 * enc - 1.0, 1.0, -1.0);
-    float l = dot(nn.xyz,-nn.xyw);
-    nn.z = l;
-    nn.xy *= sqrt(l);
-    return nn.xyz * 2.0 + vec3(0.0, 0.0, -1.0);
-}
+#if reflection_resolution_scale > 1
+vec4 GetCheckerBoardColor(in sampler2D colorSampler, in vec2 coord){
+  vec2 fragCoord = floor(coord * resolution);
+  //vec2 checkerBoard = vec2(mod(fragCoord.x, 2), mod(fragCoord.y, 2));
 
-void main() {
-  vec4 albedo = texture2D(gcolor, texcoord);
+  vec4 color = texture2D(colorSampler, coord);
+/*
+  if(texcoord.x < 0.5 && checkerBoard.y < 0.5){
+    color = vec4(1.0, 0.0, 0.0, 1.0);
+    color  = texture2D(colorSample, texcoord - vec2(pixel.x / scale * (1.0 - checkerBoard.y), 0.0));
+    color += texture2D(colorSample, texcoord - vec2(0.0, pixel.y / scale * (1.0 - checkerBoard.y)));
+    color += texture2D(colorSample, texcoord + vec2(pixel.x / scale * (1.0 - checkerBoard.y), 0.0));
+    color += texture2D(colorSample, texcoord + vec2(0.0, pixel.y / scale * (1.0 - checkerBoard.y)));
 
-  float skyLightMap = step(0.9, pow2(texture2D(gdepth, texcoord).y) * 4.0 - 0.01);
+    float weight = (1.0 - checkerBoard.x) * 2.0 + (1.0 - checkerBoard.y) * 2.0;
 
-  int id = int(round(texture2D(gdepth, texcoord).z * 255.0));
-  //bool isSky = texture2D(gdepth, texcoord).z > 0.999;
-  bool isSky = id == 255;
-  bool isPlants = id == 18 || id == 31 || id == 83;
-  bool isTranslucentBlocks = albedo.a > 0.9;
-  bool isWater = id == 8;
-  bool isParticles = id == 253;
-
-  vec3 normal = normalDecode(texture2D(gnormal, texcoord).xy);
-
-  float smoothness = texture2D(composite, texcoord).r;
-  float metallic   = texture2D(composite, texcoord).g;
-  //float emissive   = texture2D(composite, texcoord).b;
-  float roughness  = 1.0 - smoothness;
-        roughness  = roughness * roughness;
-
-  float IOR = 1.0 + texture2D(composite, texcoord).b;
-        IOR += step(0.5, metallic) * 49.0 + 2.5 * float(!isTranslucentBlocks);
-
-  float ri = 1.000293;
-  float ro = IOR;
-  if(isEyeInWater == 1){ ri = 1.333; ro = 1.000293; }
-
-  //float IOR = 1.000293;
-  //if(isTranslucentBlocks){
-  //  float r = 1.0 + emissive;
-  //  if(isEyeInWater > 0) IOR = r / IOR;
-  //  else IOR = IOR / r;
+    if(weight > 0.0) color /= weight;
+  }
+*/
+  //if(checkerBoard.x + checkerBoard.y > 0.5){
+  //  color = vec4(1.0);
   //}
+  /*
+  if(checkerBoard.x + checkerBoard.y > 1.5){
+    //color = vec4(1.0, 0.0, 0.0, 1.0);
+    color  = texture2D(colorSample, coord + checkerBoard / scale * pixel);
+    color += texture2D(colorSample, coord - checkerBoard / scale * pixel);
+    color *= 0.5;
 
-  vec3 F0 = vec3(max(0.02, metallic));
-       F0 = mix(F0, albedo.rgb, step(0.5, metallic));
+    //float weight = 2.0;
+    //if(weight > 0.0) color /= weight;
+  }else
+  */
 
-  vec3 color = texture2D(gaux2, texcoord).rgb;
+  vec3 checkerBoard = vec3(mod(fragCoord.x, 2), mod(fragCoord.y, 2), 0.0);
 
-  float depth = texture2D(depthtex0, texcoord).x;
-  float depthSolid = texture2D(depthtex1, texcoord).x;
+  #if reflection_resolution_scale == 2
+  //color = vec4(0.0);
 
-  vec4 vP = gbufferProjectionInverse * nvec4(vec3(texcoord, depth) * 2.0 - 1.0);
-       vP /= vP.w;
-  vec4 wP = gbufferModelViewInverse * vP;
+  checkerBoard.z = mod(fragCoord.x + fragCoord.y, 2);
 
-  vec2 uvJittering = texcoord + haltonSequence_2n3[int(mod(frameCounter, 16))] * pixel;
-  vec4 vPJittering = gbufferProjectionInverse * nvec4(vec3(uvJittering, texture2D(depthtex0, uvJittering)) * 2.0 - 1.0); vPJittering /= vPJittering.w;
-  vec4 wPJittering = gbufferModelViewInverse * vPJittering;
+  if(checkerBoard.z > 0.5){
 
-  #ifdef Enabled_TAA
-  vP = vPJittering;
+    color  = texture2D(colorSampler, coord + vec2(pixel.x, 0.0));
+    color += texture2D(colorSampler, coord + vec2(0.0, pixel.y));
+    color *= 0.5;
+    //color /= checkerBoard.z;
+    //float weight = (checkerBoard.x) + (checkerBoard.y);
+    //if(weight > 0.0) color /= weight;
+
+    //color = vec4(1.0);
+  }
   #endif
-  vec3 nvP = normalize(vP.xyz);
-  vec3 rP = reflect(nvP, normal);
-  vec3 nrP = normalize(rP);
-  //vec3 refractP = refract(nvP, normal, IOR);
 
-  vec3 sP = mat3(gbufferModelViewInverse) * normalize(sunPosition);
+  #if reflection_resolution_scale == 4
+  checkerBoard.z = mod(fragCoord.x * fragCoord.y, 2);
+  checkerBoard.xy = 1.0 - checkerBoard.xy;
 
-  //if(length(vP.xyz) < 100.0 || metallic > 0.5 || isTranslucentBlocks){
-  if(!isSky && smoothness > 0.015){
-    vec3 h = normalize(nrP - nvP);
-
-    float ndoth = clamp01(dot(normal, h));
-
-    float vdoth = pow5(1.0 - clamp01(dot(-nvP, h)));
-
-    vec3 f = F(F0, vdoth);
-
-    float ndotl = clamp01(dot(nrP, normal));
-    float ndotv = 1.0 - clamp01(dot(-nvP, normal));
-
-    float d = DistributionTerm(roughness, ndoth);
-    float g = VisibilityTerm(d, ndotv, ndotl);
-    float specularity = pow((1.0 - g) * clamp01(d), SpecularityReflectionPower);
-
-    float dither = bayer_32x32(texcoord, resolution);
-    dither *= 1.0;
-
-    #if Metal_Block_Reflection_Smoothness == 0
-    //float ra = max(f.r, max(f.g, f.b)) * d * g;
-    //      ra = 1.0 / (max(0.0, ra) / (4.0 * clamp01(dot(-nvP, normal))) * clamp01(dot(nrP, normal)));
-    #else
-    //float ra = 1.0 - ((min(f.b, min(f.r, f.g)) * clamp01(d * g) / (4.0 * clamp01(dot(-nvP, normal))) * clamp01(dot(nrP, normal)) + 1.0 )* 5.0);
-    //float ra = 1.0 - ((clamp01(max(f.b, max(f.r, f.g)) * d * g) / (4.0 * clamp01(dot(-nvP, normal))) * clamp01(dot(nrP, normal)) + 1.0) * 5.0);
-    #endif
-
-    float s = (pow2(ro) * (1.0 - vdoth) * g * d) / pow2((ri) * clamp01(pow2(dot(-nvP, h)) + (ro) * clamp01(dot(nrP, h))));
-    float sScreen = clamp01(1.0 / (s + 0.001) * 0.05);
-          s = clamp01(1.0 / (s + 0.001));
-
-    //vec3 noColor = color;
-
-    float fMax = max(f.r, max(f.g, f.b));
-
-    vec3 skySpecularReflection = CalculateSky(nrP, sP, cameraPosition.y, 0.5);
-         skySpecularReflection = CalculateAtmosphericScattering(skySpecularReflection, -(mat3(gbufferModelViewInverse) * nrP).y + 0.15);
-         skySpecularReflection = L2rgb(skySpecularReflection);
-         skySpecularReflection = mix(skySpecularReflection, color, max(1.0 - skyLightMap, s));
-
-    vec4 ssR = vec4(0.0);
-    if((!isParticles && !isPlants && length(vP.xyz) < 64.0 && smoothness > 0.21) || isWater){
-      ssR = raytrace(vP.xyz, rP, normal, dither * 0.01, sScreen);
-      ssR.rgb = mix(ssR.rgb, skySpecularReflection, s);
-    }
-
-    //skySpecularReflection *= clamp01(pow2(skyLightMap) * 4.0 - 0.01);
-    //skySpecularReflection *= 1.0 - g;
-    //ssR.a = mix(1.0, ssR.a, clamp01(pow2(skyLightMap) * 4.0 - 0.01));
-
-    vec3 specularReflection = mix(skySpecularReflection, ssR.rgb, max(ssR.a, 1.0 - skyLightMap));
-         //specularReflection = mix(mix(color, skySpecularReflection, clamp01(g * d) * skyLightMap), specularReflection, clamp01(g * d));
-
-    //color = mix(color, skySpecularReflection, clamp01(g * d) * skyLightMap);
-
-    color += specularReflection * clamp01(pow3(g * d)) * f;
-
-    //color = vec3(minComponent(albedo.rgb));
-
-    //color = ssR.rgb;
+  if(checkerBoard.z < 0.5){
+    color += texture2D(colorSampler, coord + (checkerBoard.xy * pixel));
+    color += texture2D(colorSampler, coord - (checkerBoard.xy * pixel));
+    color *= 0.5;
+    //color *= 0.
+    //color /= 1.0 + max(checkerBoard.x,checkerBoard.y);
+    //color /= 1.0 + (1.0 - checkerBoard.x) * (1.0 - checkerBoard.y);
+    //color = vec4(1.0);
   }
 
-  //color = texture2D(composite, texcoord).rgb;
+  /*
+  if(mod(fragCoord.x + fragCoord.y, 2) > 0.5){
+    color  = texture2D(colorSample, coord + vec2((checkerBoard.x) * pixel.x, 0.0));
+    color += texture2D(colorSample, coord + vec2(0.0, (checkerBoard.y) * pixel.y));
+    float weight = (checkerBoard.x) + (checkerBoard.y);
+    if(weight > 0.0) color /= weight;
+  }else if(checkerBoard.x + checkerBoard.y > 0.5){
+    color  = texture2D(colorSample, coord + (checkerBoard.xy * pixel));
+    color += texture2D(colorSample, coord - (checkerBoard.xy * pixel));
+    color *= 0.5;
+  }
+  */
+  #endif
 
-  //color = albedo.rgb * 255.0;
 
-  //color = texture2D(composite, texcoord).rgb;
+/*
+  if(checkerBoard.x < 0.5){
+    //color = vec4(1.0, 0.0, 0.0, 1.0);
 
-  //color = vec3(texture2D(gaux3, texcoord).r);
-  //color = mix(color, texture2D(gaux2, texcoord).rgb, texture2D(gaux3, texcoord).r);
+    color = texture2D(colorSample, texcoord + vec2((1.0 - checkerBoard.x) / scale * pixel.x, 0.0));
+    color += texture2D(colorSample, texcoord + vec2(0.0, (1.0 - checkerBoard.y) / scale * pixel.y));
 
-  color = mix(color, texture2D(gaux2, texcoord).rgb, texture2D(gaux1, texcoord).a);
+    float weight = (1.0 - checkerBoard.x) + (1.0 - checkerBoard.y);
+    if(weight > 0.0) color /= weight;
+  }else if(checkerBoard.y > 0.5){
+    color = texture2D(colorSample, texcoord + vec2((checkerBoard.x) / scale * pixel.x, 0.0));
+    color += texture2D(colorSample, texcoord + vec2(0.0, (checkerBoard.y) / scale * pixel.y));
 
-  //color = vec3(maxComponent(albedo.rgb) - minComponent(albedo.rgb));
+    float weight = (checkerBoard.x) + (checkerBoard.y);
+    if(weight > 0.0) color /= weight;
+  }
+*/
+/*
+  if(checkerBoard.y < 0.5){
+    color  = texture2D(colorSample, texcoord - vec2(pixel.x / scale * (1.0 - checkerBoard.y), 0.0)) * 0.5
+           + texture2D(colorSample, texcoord - vec2(0.0, pixel.y / scale * (1.0 - checkerBoard.y))) * 0.5;
+  }else if(checkerBoard.x < 0.5){
+    color  = texture2D(colorSample, texcoord + vec2(pixel.x / scale * (1.0 - checkerBoard.x), 0.0)) * 0.5
+           + texture2D(colorSample, texcoord + vec2(0.0, pixel.y / scale * (1.0 - checkerBoard.x))) * 0.5;
+  }
+*/
 
-  //float cc = maxComponent(albedo.rgb) - minComponent(albedo.rgb);
+  return color;
+}
+#endif
 
-  //color = vec3(clamp01(maxComponent(albedo.rgb - vec3(0.858, 0.827, 0.623) * 0.5)));
+/*
+vec3 CalculateTemporalReflection(){
+  vec3 reflection = vec3(0.0);
 
-  //color.rgb = vec3(min(color.r, min(color.g, color.b)));
+  vec4 pvP = gbufferProjectionInverse * nvec4(vec3(texcoord, texture(depthtex0, texcoord).x) * 2.0 - 1.0);
+       pvP /= pvP.w;
+       pvP = gbufferModelViewInverse * pvP;
+       pvP.xyz += cameraPosition - previousCameraPosition;
+       pvP = gbufferPreviousModelView * pvP;
+       pvP = gbufferPreviousProjection * pvP;
+       pvP /= pvP.w;
 
-  //color = vec3(clamp01(texture2D(gaux3, texcoord).x * 1024.0 - length(vP.xyz))) * 0.1;
-  //color = vec3(length(nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, texture2D(gaux3, texcoord).x) * 2.0 - 1.0)))) * 0.1;
-  //if(texture)
+  float depthFix = min(1.0, length(vP.xyz));
+  if(int(round(texture2D(gdepth, texcoord).z * 255.0)) == 254.0) depthFix *= MC_HAND_DEPTH * MC_HAND_DEPTH;
 
-  //color = albedo.rgb;
+  vec2 previousCoord = (pvP.xy * 0.5 + 0.5);
+       previousCoord = (unjitterUV - previousCoord) * depthFix;
+       previousCoord = -previousCoord + texcoord;
 
-  //color = texture2D(gaux3, texcoord).rgb;
+  #if reflection_resolution_scale == 1
+    vec4 reflectionResult = texture2D(gaux1, texcoord);
+    float depth = step(texture2D(gaux1, previousCoord).a, reflectionResult.a);
+  #else
+    vec4 reflectionResult = GetCheckerBoardColor(gaux1, texcoord);
 
-  //color = vec3(smoothness, metallic, 0.0);
+    float depth = reflectionResult.a;
+          depth = step(GetCheckerBoardColor(gaux1, previousCoord).a, depth);
+  #endif
 
-  //color = L2rgb(color);
+  reflection = reflectionResult.rgb * overRange;
+  reflection = mix(reflection, texture2D(gaux3, previousCoord).rgb, 0.875 * depth);
 
-/* DRAWBUFFERS:5 */
-  gl_FragData[0] = vec4(color, 0.0);
-  //gl_FragData[1] = solidBlockSpecularReflection;
+  return reflection;
+}
+*/
+void main(){
+  vec3 color = texture2D(gaux2, texcoord).rgb;
+
+  bool isSky = int(round(texture2D(gdepth, texcoord).z * 255.0)) == 255;
+
+  vec2 unjitterUV = texcoord - R2sq2[int(mod(frameCounter, 16))] * pixel;
+  vec3 vP = nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, texture(depthtex0, texcoord).x) * 2.0 - 1.0));
+
+  //vec2 coord = nvec3(gbufferProjection * nvec4(vP + vP * vec3(.0, .0, 0.5))).xy * 0.5 + 0.5;
+  //color = texture2D(gaux2, coord).rgb;
+
+  vec3 reflection = vec3(0.0);
+
+  if(!isSky){
+    vec3 f = texture2D(composite, texcoord).rgb;
+    float brdf = texture2D(composite, texcoord).a;
+
+    #if Reflection_Filter == Temporal
+      vec4 pvP = gbufferProjectionInverse * nvec4(vec3(texcoord, texture(depthtex0, texcoord).x) * 2.0 - 1.0);
+           pvP /= pvP.w;
+           pvP = gbufferModelViewInverse * pvP;
+           pvP.xyz += cameraPosition - previousCameraPosition;
+           pvP = gbufferPreviousModelView * pvP;
+           pvP = gbufferPreviousProjection * pvP;
+           pvP /= pvP.w;
+
+      float depthFix = min(1.0, length(vP.xyz));
+      if(int(round(texture2D(gdepth, texcoord).z * 255.0)) == 254.0) depthFix *= MC_HAND_DEPTH * MC_HAND_DEPTH;
+
+      vec2 previousCoord = (pvP.xy * 0.5 + 0.5);
+           previousCoord = (unjitterUV - previousCoord) * depthFix;
+           previousCoord = -previousCoord + texcoord;
+
+      #if reflection_resolution_scale == 1
+        vec4 reflectionResult = texture2D(gaux1, texcoord);
+        float lastFrameDepth = texture2D(gaux1, previousCoord).a;
+        float depth = float(lastFrameDepth < reflectionResult.a && lastFrameDepth + 0.001 > reflectionResult.a);
+      #else
+        vec4 reflectionResult = GetCheckerBoardColor(gaux1, texcoord);
+
+        float lastFrameDepth = texture2D(gaux1, previousCoord).a;
+        float depth = float(lastFrameDepth < reflectionResult.a && lastFrameDepth + 0.001 > reflectionResult.a);
+      #endif
+
+      reflection = reflectionResult.rgb * overRange;
+      reflection = mix(reflection, texture2D(gaux3, previousCoord).rgb, 0.875 * depth);
+    #elif Reflection_Filter == Simple_Filter
+      #if reflection_resolution_scale == 1
+        reflection = texture2D(gaux1, texcoord).rgb * overRange;
+      #else
+        reflection = GetCheckerBoardColor(gaux1, texcoord).rgb * overRange;
+      #endif
+    #endif
+
+    color += reflection / overRange * f * brdf;
+  }
+
+/* DRAWBUFFERS:56 */
+  gl_FragData[0] = vec4(color, 1.0);
+  gl_FragData[1] = vec4(reflection.rgb, 1.0);
 }

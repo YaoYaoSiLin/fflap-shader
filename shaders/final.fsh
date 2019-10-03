@@ -1,9 +1,12 @@
 #version 130
 
-#define Brightness 3.5
+#define in_low_quality_rendering
+
+#define Brightness 0.3
 
 #define Enabled_TAA
-	#define TAA_Sharpen_Factor 0			//[0 5 10 15 20 25 30 35 40 45 50 55 60 65 70 75 80 85 90 95 100]
+	#define TAA_Sharpen 100							//[0 5 10 15 20 25 30 35 40 45 50 55 60 65 70 75 80 85 90 95 100]
+	#define TAA_Sharpen_Factor 0.0025   //[0.0025 0.00275 0.003 0.00325 0.0035 0.00375 0.004 0.0045 0.005]
 	#define TAA_Color_Sampler_Size 0.55	//[0.2 0.25 0.3 0.35 0.4 0.45 0.5 0.55 0.6 0.65 0.7 0.75 0.8 0.85 0.9]
 
 #define Enabled_Bloom								//Bloom, used on screen Effect and hurt Effects
@@ -17,9 +20,10 @@
 
 uniform sampler2D gdepth;
 uniform sampler2D gnormal;
+uniform sampler2D composite;
 uniform sampler2D gaux2;
-uniform sampler2D gaux3;
-uniform sampler2D gaux4;
+
+#define colortex gaux2
 
 uniform sampler2D depthtex0;
 
@@ -31,7 +35,7 @@ uniform float viewHeight;
 uniform float rainStrength;
 uniform float aspectRatio;
 
-//uniform int frameCounter;
+uniform int isEyeInWater;
 
 uniform ivec2 eyeBrightnessSmooth;
 
@@ -40,19 +44,15 @@ uniform mat4 gbufferProjection;
 uniform mat4 gbufferModelViewInverse;
 uniform mat4 gbufferModelView;
 
-uniform float getHereMedic;
-//uniform int RUA;
-uniform float waterFall;
-
 vec2 resolution = vec2(viewWidth, viewHeight);
 vec2 pixel      = 1.0 / vec2(viewWidth, viewHeight);
 
 #include "libs/common.inc"
 
 #define Stage Final
-#define bloomSampler gaux3
+#define bloomSampler gnormal
 
-//#include "libs/PostProcessing.glsl"
+#include "libs/PostProcessing.glsl"
 
 vec2 uv = gl_TexCoord[0].st;
 /*
@@ -147,10 +147,10 @@ vec3 ACESToneMapping(in vec3 color, in float adapted_lum) {
 vec3 Uncharted2Tonemap(in vec3 color, in float x) {
 	float A = 2.51;
 	float B = 0.59;
-	float C = 0.01;
-	float D = 0.17;
-	float E = 0.0002;
-	float F = 0.08;
+	float C = 0.1;
+	float D = 0.31;
+	float E = 0.0001;
+	float F = 0.09;
 
 	//color = L2rgb(color);
 
@@ -158,11 +158,17 @@ vec3 Uncharted2Tonemap(in vec3 color, in float x) {
 			 color2 /= ((x*(A*x+C*B)+D*E)/(x*(A*x+B)+D*F))/E/F;
 			 //color2 = color2 * 0.249;
 
-	float l = getLum(color2) * 0.999 + 0.001;
+	//float l = getLum(color2) * 0.999 + 0.001;
 
-	color = color / (color * 0.999 + 0.001) * color2;
+	//color = color / (color * 0.999 + 0.001) * color2;
+	//color = color2 / ;
 
-	return (color);
+	//l = color2 / (1.0 + l) * 0.5;
+
+	//vec3 l = color2 / (color * 0.996 + 0.004) * color2;
+	//color = l / (color2 * 0.996 + 0.004) * color;
+
+	return (color2);
 }
 
 float noiseTexture5(in vec2 noiseCoord, float t){
@@ -191,7 +197,7 @@ void main(){
 	vec2 res = vec2(viewWidth, viewHeight);
 
 	vec2 texcoord = uv;
-
+	/*
 	vec4 waterColor = vec4(0.0);
 
 //////
@@ -208,13 +214,13 @@ void main(){
 		float noiseTextureB = noiseTexture5((texcoord + vec2(0.0, 0.2)) * vec2(1.0, 0.5), t);
 
 		vec3 n = vec3(0.0);
-	/*
-				 n = cross(
-					   vec3(0.1, 4 * (noiseTexture.x - noiseTextureB.x) / 0.1, 0.0),
-						 vec3(0.0, 4 * (noiseTexture.x - noiseTextureA.x) / 0.1, 0.1)
-					   );
-				n.z = 0.0;
-	*/
+
+				// n = cross(
+				//	   vec3(0.1, 4 * (noiseTexture.x - noiseTextureB.x) / 0.1, 0.0),
+				//		 vec3(0.0, 4 * (noiseTexture.x - noiseTextureA.x) / 0.1, 0.1)
+				//	   );
+				//n.z = 0.0;
+
 
 		float waterFallAlive = max(0.0, pow(waterFall, 0.9) * 1.05 - 0.05);
 
@@ -236,7 +242,7 @@ void main(){
 		vP.xyz = vP.xyz + rVPN * pow(1.0 - min(abs(vPc.y), 1.0), 3.0) * 16.0 * waterFallAlive;
 		//texcoord = nvec3(gbufferProjection * nvec4(vP.xyz)).xy * 0.5 + 0.5;
 	}
-
+	*/
 	/*
 	if(waterFall > 0.01){
 	vec2 noiseCoord = texcoord * vec2(1.0, 0.56) + vec2(0.0, frameTimeCounter * 0.13);
@@ -254,14 +260,14 @@ void main(){
 	}
 	*/
 
-  vec3 color = (texture2D(gaux2, texcoord).rgb);
+  vec3 color = (texture2D(colortex, texcoord).rgb);
 
-	#if defined(Enabled_TAA) && TAA_Sharpen_Factor > 0
+	#if defined(Enabled_TAA) && TAA_Sharpen > 0
 		vec3 colorIndex = vec3(0.0);
 
 		for(float i = -1.0; i <= 1.0; i += 1.0){
 			for(float j = -1.0; j <= 1.0; j += 1.0){
-				colorIndex += texture2D(gaux2, texcoord + pixel * vec2(i, j) * TAA_Color_Sampler_Size).rgb;
+				colorIndex += texture2D(colortex, texcoord + pixel * vec2(i, j)).rgb;
 			}
 		}
 
@@ -269,13 +275,23 @@ void main(){
 		colorIndex *= 0.125;
 
 		//if(texcoord.x < 0.5)
-		color += (color - colorIndex) * 0.0025 * TAA_Sharpen_Factor * min(1.0, abs(254.0 - round(texture2D(gdepth, texcoord).z * 255.0)));
+		color += (color - colorIndex) * TAA_Sharpen_Factor * TAA_Sharpen;
 		color = clamp01(color);
 	#endif
 
 	//if(texcoord.x < 0.5) color = texture2D(gaux2, texcoord).aaa;
 
+	//color = texture2D(colortex, fract(texcoord * resolution) * pixel).rgb;
+
+
+	#ifndef Enabled_TAA
+		//color *= overRange;
+	#endif
+
 	color = rgb2L(color);
+
+	//color = color / (color + 8.0 / 1.0);
+	//color = (color / (color * 4.0 + 0.25)) / (0.11 / (0.11 * 4.0 + 0.25));
 
 	//if(int(texture2D(gdepth, texcoord).z * 255) == 254) color = vec3(0.0);
 	//color = vec3(texture2D(gdepth, texcoord).z);
@@ -311,27 +327,113 @@ void main(){
 	//color = color / (color + 0.84);
 	//color = Uncharted2Tonemap(color, 1.0);
 
-	#ifdef Enabled_Bloom
-	//CalculateBloom(color, texcoord);
-	//color = texture2D(gaux3, texcoord).rgb;
-	#endif
+	//color *= overRange * overRange;
 
 	//color *= 2.0;
 
 	//color = color / (color + 0.679);
 	float brightness = 1.0 / Brightness;
-	color = (color / (0.01 + getLum(color))) / (brightness / (0.01 + getLum(color)));
+	//color *= 2.083;
+	//color = (color / (0.01 + getLum(color))) / (brightness / (0.01 + getLum(color)));
+	//color *= overRange * overRange * overRange;
+	//color = (color * 4.0) / (19.73 / 4.0);
+	//color *= 1.72;
 
 	//color *= 1.0 / (texture2D(gaux3, texcoord).ggg + 0.01) * 0.2;
 	//color *= 1.0 + pow5(getLum(texture2D(gaux2, texcoord).rgb)) * 5.0;
 	//color *= texture2D(gaux3, vec2(0.5)).x;
 
+	//color = rgb2L(BicubicTexture(gaux3, texcoord).rgb) * 4.0;
+
+
+	//color = color / (color + 8.0);
+	//color = (color / (color * 4.0 + 0.25)) / (0.11 / (0.11 * 4.0 + 0.25));
+
+	//color = color * (color + 0.002676);
+	//color = (color * (color * 0.5 + 0.02668)) * (1.0 * (0.5 + 0.02668));
+
+	//color *= pow(overRange, 2.2);
+
+	vec3 bloom = texture2D(composite, texcoord).rgb;
+			 bloom = rgb2L(bloom) * overRange;
+
+	vec3 tonemapColor = bloom * overRange;
+			 //tonemapColor = tonemapColor / (tonemapColor + 0.08);
+			 tonemapColor = (tonemapColor / (tonemapColor + 0.0032)) / (1.0 / (1.0 + 0.0032));
+			 //tonemapColor = Uncharted2Tonemap(tonemapColor, 1.0);
+
+	//color = tonemapColor;
+
+	#ifdef Enabled_Bloom
+	CalculateBloom(bloom, texcoord);
+	#endif
+
+	bloom /= overRange;
+  //bloom = bloom / (bloom + 0.08);
+	bloom = (bloom / (bloom + 0.0032)) / (1.0 / (1.0 + 0.0032));
+	//bloom = Uncharted2Tonemap(bloom, 1.0);
+	bloom = max(vec3(0.0), bloom - color);
+
+	color += bloom;
+
 	color = Uncharted2Tonemap(color, 1.0);
 
+	//bloom -= color;
+	//color += max(vec3(0.0), bloom);
+
+	float exposure = texture2D(gaux2, texcoord).a;
+
+	//color /= overRange * overRange;
+	//color = color / (color + 0.08);
+	//color = (color / (color + 0.032)) / (1.0 / (1.0 + 0.032));
+	//color = Uncharted2Tonemap(color, 1.0);
+
+	//color /= pow5(0.33 + exposure) + 0.004;
+	//color *= 0.02;
+
+	//color = vec3(exposure);
+
+	//color /= overRange * overRange;
+
+	//color = color / (color + 0.002676 / Brightness);
+	//color = (color / (color + 0.02668)) / (1.0 / (1.0 + 0.02668));
+	//color = Uncharted2Tonemap(color, 1.0);
+
+	//float exposure = pow(texture2D(gaux2, vec2(0.5)).b, 2.2);
+
+	//color *= overRange;
+
+	//if(texcoord.x < 0.3) color *= 10.0;
+
+	//color *= 1.0 / 0.004;
+	//color *= 2.5
+	float exposureRange = 16.0;
+
+	//if(texcoord.x < 0.5){
+		//color /= clamp(exposure * 12.566, 0.125, 8.0);
+		//color *= 0.33;
+	//}
+		//color *= 0.4;
+		//color *= 0.4;
+		//color /= exposure * 0.9998 + 0.0002;
+
+	//color /= exposureRange;
+	//color /= exposureRange * 2.0 * (exposure * 0.9998 + 0.0002);
+	//color *= 4.0;
+	//}
+	//color *= 40.0;
+
+	//color += clamp01(texture2D(gcolor, texcoord).rgb / overRange - color) * nightVision;
+
+	//color = color / (color + 8.0 / Brightness);
+	//color = (color / (color * 4.0 + 0.25)) / (0.11 / (0.11 * 4.0 + 0.25));
+	//color = Uncharted2Tonemap(color, 1.0);
+
+	//if(texcoord.x > 0.6) color *= 10.0;
 	//color = ACESToneMapping(color, 1.0);
 
 	float lum = getLum(color);
-	color = clamp01(lum + (color - lum) * 0.97);
+	//color = clamp01(lum + (color - lum) * 0.97);
 
 	//color += vec3(test);
 
@@ -340,6 +442,11 @@ void main(){
 	#ifdef RawOut
 		color = texture2D(gaux4, texcoord).rgb;
 	#endif
+
+	//if(texcoord.x < 0.2) {
+	//	color = vec3(exposure);
+	//	if(exposure > 1.0 && texcoord.x < 0.1) color = vec3(1.0, 0.0, 0.0);
+	//}
 
 	//if(texcoord.x < 0.5) color = 1.0 / (texture2D(gaux3, texcoord).ggg + 0.05) * 0.05;
 

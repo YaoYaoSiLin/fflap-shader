@@ -3,12 +3,11 @@
 #extension GL_EXT_gpu_shader4 : require
 #extension GL_EXT_gpu_shader5 : require
 
-#define SHADOW_MAP_BIAS 0.9
-
-#define SpecularityReflectionPower 2.0            //[1.0 1.2 1.5 1.75 2.0 2.25 2.5 2.75 3.0]
-
 //#define Enabled_SSAO
     #define SSAO_Scale 0.5  //[0.5 0.70710677 1.0]
+
+#define Enabled_ScreenSpace_Shadow
+//#define Fast_Normal
 
 const int   noiseTextureResolution  = 64;
 
@@ -23,16 +22,12 @@ uniform sampler2D depthtex0;
 uniform sampler2D depthtex1;
 uniform sampler2D depthtex2;
 
-uniform sampler2D noisetex;
-
-uniform sampler2D shadowtex0;
-uniform sampler2D shadowtex1;
-uniform sampler2D shadowcolor0;
-uniform sampler2D shadowcolor1;
-
+uniform float frameTimeCounter;
 uniform float rainStrength;
 uniform float viewWidth;
 uniform float viewHeight;
+uniform float nightVision;
+uniform float aspectRatio;
 
 uniform vec3 sunPosition;
 uniform vec3 cameraPosition;
@@ -47,8 +42,6 @@ uniform mat4 gbufferProjectionInverse;
 uniform mat4 gbufferProjection;
 uniform mat4 gbufferModelViewInverse;
 uniform mat4 gbufferModelView;
-uniform mat4 shadowModelView;
-uniform mat4 shadowProjection;
 uniform mat4 shadowProjectionInverse;
 
 in vec2 texcoord;
@@ -57,10 +50,10 @@ in float fading;
 in vec3 sunLightingColorRaw;
 in vec3 skyLightingColorRaw;
 
-const bool shadowcolor0Mipmap = true;
-
 vec2 resolution = vec2(viewWidth, viewHeight);
 vec2 pixel = 1.0 / vec2(viewWidth, viewHeight);
+
+#define gaux2 colortex5
 
 #include "libs/common.inc"
 #include "libs/dither.glsl"
@@ -68,6 +61,8 @@ vec2 pixel = 1.0 / vec2(viewWidth, viewHeight);
 
 #define CalculateHightLight 1
 #define CalculateShadingColor 1
+
+#define Void_Sky
 
 #include "libs/brdf.glsl"
 #include "libs/light.glsl"
@@ -90,7 +85,7 @@ vec3 normalDecode(vec2 enc) {
 float LinearlizeDepth(float depth) {
     return (far * (depth - near)) / (depth * (far - near));
 }
-
+/*
 float noise(vec3 x)
 {
     vec3 p = floor(x);
@@ -102,7 +97,7 @@ float noise(vec3 x)
     float v2 = texture2D( noisetex, (uv + vec2(37.0, 17.0)) / noiseTextureResolution, -100.0 ).x;
     return mix(v1, v2, f.z);
 }
-
+*/
 vec4 GetViewPosition(in vec2 coord, in sampler2D depth){
   vec4 vP = gbufferProjectionInverse * nvec4(vec3(coord, texture2D(depth, coord).x) * 2.0 - 1.0);
        vP /= vP.w;
@@ -159,21 +154,37 @@ vec3 CalculateRays(in vec4 wP, in bool isSky){
 }
 */
 void main() {
+  float depth         = texture2D(depthtex0, texcoord).x;
+  float particlesDepth = texture2D(colortex4, texcoord).a;
+  if(linearizeDepth(depth) > linearizeDepth(particlesDepth) && particlesDepth > 0.0) depth = particlesDepth;
+  vec4  vP            = gbufferProjectionInverse * nvec4(vec3(texcoord, depth) * 2.0 - 1.0); vP /= vP.w;
+
   vec4 albedo = texture2D(colortex0, texcoord);
 
-  vec4 particlesColor = texture2D(colortex4, texcoord);
-
   vec2 lightMap = texture2D(colortex1, texcoord).xy;
-  float torchLightMap = max(0.0, pow5(lightMap.x) * 15.0 - 0.005 + max(0.0, pow5(lightMap.x) * 15.0 - 5.0) * 0.3);
+  float torchLightMap = lightMap.x * 15.0;
   float skyLightMap = max(pow2(lightMap.y) * 1.004 - 0.004, 0.0);
 
   int id = int(round(texture2D(colortex1, texcoord).z * 255));
   bool isSky = id == 255;
   bool isParticles = false;
 
-  vec3 normal = normalDecode(texture2D(colortex2, texcoord).xy);
+  vec3 screenCenterVector = nvec3(gbufferProjectionInverse * nvec4(vec3(vec2(0.5), particlesDepth * 2.0 - 1.0)));
+
+  vec2 normalData = texture2D(colortex2, texcoord).xy;
+  if(texture2D(colortex2, texcoord).a < 0.2) normalData.xy = normalEncode(normalize(screenCenterVector * vec3(1.0, 0.0, -1.0)));
+  vec3 normal = normalDecode(normalData);
+
+  #ifndef Fast_Normal
+    vec2 normalExct = texture2D(gaux2, texcoord).xy;
+    vec3 sunVisibleNormal = normal;
+    if(texture(colortex1, texcoord).z < 0.5) sunVisibleNormal = normalDecode(normalExct.xy);
+  #endif
+
+  float preShadow = texture2D(colortex2, texcoord).z;
 
   float smoothness = texture2D(colortex3, texcoord).r;
+        //smoothness *= smoothness;
   float metallic   = texture2D(colortex3, texcoord).g;
   float emissive   = texture2D(colortex3, texcoord).b;
   float roughness  = 1.0 - smoothness;
@@ -182,32 +193,20 @@ void main() {
   vec3 F0 = vec3(max(0.02, metallic));
        F0 = mix(F0, albedo.rgb, step(0.5, metallic));
 
-  vec3 sP = normalize(mat3(gbufferModelViewInverse) * sunPosition);
-
-  float depth         = texture2D(depthtex1, texcoord).x;
-  vec4  vP            = gbufferProjectionInverse * nvec4(vec3(texcoord, depth) * 2.0 - 1.0); vP /= vP.w;
-  float blockDistance = length(vP.xyz);
-
-  vec4 particlesP = gbufferProjectionInverse * nvec4(vec3(texcoord, texture2D(colortex5, texcoord).z) * 2.0 - 1.0);
-       particlesP /= particlesP.w;
-
-  float particlesDepth = length(particlesP.xyz);
-
-  isParticles = blockDistance * 1.05 - particlesDepth + 0.05 > 0.0 && particlesColor.a > 0.01;
-
   vec4 wP = gbufferModelViewInverse * vP;
   vec3 nvP = normalize(vP.xyz);
   vec3 rP = reflect(normalize(vP.xyz), normal);
   vec3 nrP = normalize(rP.xyz);
 
-  vec2 uvJittering = texcoord + haltonSequence_2n3[int(mod(frameCounter, 16))] * pixel;
-  vec4 vPJittering = GetViewPosition(uvJittering, depthtex1);
-  vec4 wPJittering = (gbufferModelViewInverse) * vPJittering;
+  vec2 uvJ = texcoord + R2sq2[int(mod(frameCounter, 16))] * pixel;
+  vec4 vPJ = GetViewPosition(uvJ, depthtex1);
+  vec4 wPJ = (gbufferModelViewInverse) * vPJ;
 
-  vec3 torchLightingColor = rgb2L(vec3(1.022, 0.782, 0.344));
+  vec3 sP = normalize(mat3(gbufferModelViewInverse) * sunPosition);
+
+  vec3 torchLightingColor = rgb2L(vec3(1.022, 0.768, 0.334) - 0.1);
 
   vec3 color = vec3(0.0);
-  vec3 color2 = vec3(0.0);
 
   vec3 shading = vec3(1.0);
   float ao = 1.0;
@@ -220,12 +219,11 @@ void main() {
   //}
 
   albedo.rgb = pow(albedo.rgb, vec3(2.2));
+  albedo.a = 0.0;
 
-  if(isSky){
-    //albedo.a = max(particlesColor.a, 0.0);
-    albedo.a = 0.0;
-    //color = albedo.rgb;
-  }else{
+  if(!isSky){
+    albedo.a = 1.0;
+
     //vec3 sunLightingColor = CalculateFogLighting(sunLightingColorRaw, playerEyeLevel + cameraPosition.y, wP.y + cameraPosition.y, sunLightingColorRaw, skyLightingColorRaw, fading);
     //vec3 skyLightingColor = CalculateFogLighting(skyLightingColorRaw, playerEyeLevel + cameraPosition.y, wP.y + cameraPosition.y, sunLightingColorRaw, skyLightingColorRaw, fading);
 
@@ -234,7 +232,7 @@ void main() {
     //ao = pow(dot(aoSample, vec4(0.25)), 2.0);
     #endif
 
-    vec4 sunDirctLighting = CalculateShading(shadowtex1, wP, true);
+    vec4 sunDirctLighting = CalculateShading(shadowtex1, shadowtex0, wP, clamp01(dot(nvP, normalize((shadowLightPosition) + vP.xyz))) + (1.0 - max(0.0, dot(normalize(shadowLightPosition), normal))));
 /*
     vec3 o = mat3(gbufferModelView) * wP.xyz;
 
@@ -266,37 +264,45 @@ void main() {
 */
 
 
-    shading = mix(vec3(clamp01((pow5(skyLightMap) - 0.2) * 12.5)), sunDirctLighting.rgb, sunDirctLighting.a) * texture2D(colortex2, texcoord).z;
+    shading = mix(vec3(clamp01((pow5(skyLightMap) - 0.2) * 12.5)), sunDirctLighting.rgb, sunDirctLighting.a) * preShadow;
 
     //vec3 sunLighting = albedo.rgb * sunLightingColorRaw * pow(fading, 5.0) * shading * clamp01(dot(normalize(shadowLightPosition), normal));
 
-    vec3 sunLighting = BRDF(albedo.rgb, normalize(shadowLightPosition), -nvP, normal, roughness, metallic, F0) * shading * sunLightingColorRaw * pow(fading, 5.0) * 3.0;
+    vec3 sunLighting = BRDF(albedo.rgb, normalize(shadowLightPosition), -nvP, normal, sunVisibleNormal, roughness, metallic, F0) * shading * sunLightingColorRaw * fading * SunLight;
     vec3 heldLighting = vec3(0.0);
-    //if(heldBlockLightValue > 1) heldLighting = BRDF(albedo.rgb, -nvP, -nvP, normal, (roughness), metallic, F0) * torchLightingColor * pow2(clamp01((heldBlockLightValue - 5.0 - length(vP.xyz)) * 0.1));
+
+    if(heldBlockLightValue > 1){
+      heldLighting = BRDF(albedo.rgb, -nvP, -nvP, normal, normal, roughness, metallic, F0);
+      //heldLighting *= pow2(clamp01((heldBlockLightValue - 1.0 - length(vP.xyz)) * 0.1));
+      heldLighting *= pow2(max(0.0, heldBlockLightValue - 4.0 - length(vP.xyz)) * 0.0909);
+      //vec3 lightPosition = mat3(gbufferModelView) * (wP.xyz + cameraPosition - vec3(-79.5, 79.25, 47.5));
+      //     lightPosition = vP.xyz * vec3(-1.0, 1.0, 1.0);
+      //heldLighting *= vec3(ScreenSpaceShadow(-lightPosition, vP.xyz));
+    }
 
     //vec3 skyLighting = albedo.rgb * (clamp01(dot(normalize(upPosition), normal) * 0.5 + 0.5) * 0.85 + 0.15) * ao;
     vec3 skyLighting  = albedo.rgb * clamp01(dot(normalize(upPosition), normal));
          skyLighting += albedo.rgb * abs(dot(normalize(reflect(mat3(gbufferModelView) * vec3(1.0, 0.0, 0.0), normalize(upPosition))), normal)) * 0.48 * ao;
          skyLighting += albedo.rgb * abs(dot(normalize(reflect(mat3(gbufferModelView) * vec3(0.0, 0.0, 1.0), normalize(upPosition))), normal)) * 0.48 * ao;
          skyLighting += albedo.rgb * abs(dot(normalize(reflect(mat3(gbufferModelView) * vec3(0.0, 1.0, 0.0), normalize(upPosition))), normal)) * 0.21 * ao;
-         skyLighting *= skyLightMap * skyLightingColorRaw;
+         skyLighting *= skyLightMap * skyLightingColorRaw * 0.92;
 
-    vec3 fakeGI  = albedo.rgb * clamp01(dot(normalize(reflect(normalize(shadowLightPosition), normalize(upPosition))), normal)) * 0.557;
-         fakeGI += albedo.rgb * clamp01(dot(reflect(normalize(shadowLightPosition), mat3(gbufferModelView) * vec3(0.0, 0.0, -1.0)), normal)) * 0.216;
-         fakeGI += albedo.rgb * clamp01(dot(normalize(vP.xyz - shadowLightPosition), normal)) * 0.216;
-         fakeGI *= (skyLightingColorRaw + sunLightingColorRaw * pow(fading * clamp01(dot(sP, vec3(0.0, 1.0, 0.0))), 3.0)) * skyLightMap * skyLightMap * ao;
+    vec3 nlP = normalize(shadowLightPosition);
+    vec3 nuP = normalize(upPosition);
+    vec3 zPlane = mat3(gbufferModelView) * vec3(0.0, 0.0, 1.0);
 
-    vec3 torchLighting = albedo.rgb * torchLightMap * 0.0549;
-    color += clamp01(torchLighting - sunLighting) * torchLightingColor;
+    vec3 fakeGI  = albedo.rgb * clamp01(dot(normalize(reflect(nlP, nuP)), normal)) * clamp01(pow5(dot(nlP, nuP)));
+         fakeGI += albedo.rgb * clamp01(dot(reflect(nlP, zPlane), normal)) * clamp01(pow5(dot(nlP, zPlane)));
+         fakeGI *= sunLightingColorRaw * skyLightMap * skyLightMap * ao * step(-0.5, dot(normal, nuP)) * 0.5;
+         //fakeGI += albedo.rgb * clamp01(dot(normalize(vP.xyz - shadowLightPosition), normal)) * 0.09;
+         //fakeGI *= (skyLightingColorRaw + sunLightingColorRaw * pow(fading * clamp01(dot(sP, vec3(0.0, 1.0, 0.0))), 3.0)) * skyLightMap * skyLightMap * ao;
 
-    color += skyLighting;
-    color += fakeGI * 0.746;
+    color = sunLighting;
 
-    //color = torchLightMap * torchLightingColor * clamp01(albedo.rgb * (pow2(abs(dot(normal, normalize(upPosition))) * torchLightMap / 15.0) + 1.0) * 0.03 - (color + sunLighting)) * 1.0;
-    //color += clamp01(torchLightMap * albedo.rgb * (pow2(abs(dot(normal, normalize(upPosition))) * torchLightMap / 15.0) + 1.0) * 0.05 - (color + sunLighting)) * torchLightingColor;
-    //color += torchLighting * vec3(clamp01(getLum(torchLighting - (color + sunLighting)))) / (getLum(torchLighting) + 0.001);
+    vec3 diffuse  = skyLighting;
+         diffuse += fakeGI;
+         //diffuse += torchLighting;
 
-    if(smoothness > 0.0001){
     vec3 h = normalize(nrP - nvP);
 
     float ndotv = 1.0 - clamp01(dot(-nvP, normal));
@@ -307,82 +313,51 @@ void main() {
     vec3  f = F(F0, pow5(vdoth));
     float d = DistributionTerm(roughness, ndoth);
     float g = VisibilityTerm(d, ndotv, ndotl);
-    float specularity = pow(1.0 - clamp01(g), SpecularityReflectionPower);
 
-    color *= rgb2L(vec3(1.0 - metallic));
-    color *= rgb2L(1.0 - f * clamp01(g * d));
+    float brdf = clamp01(g * d);
 
-    //skySpecularReflection.rgb = L2rgb(CalculateSky(nrP, sP, cameraPosition.y, 0.5)) * f * specularity;
-    }
+    diffuse *= rgb2L(vec3(1.0 - metallic));
+    diffuse *= rgb2L(1.0 - f * brdf);
 
-    color += sunLighting;
-    //color += albedo.rgb * shading.rgb * sunLightingColorRaw * pow(fading, 5.0);
-  }
+    //torchLightMap = max(0.0, pow5(lightMap.x) * 15.0 - 0.005 + max(0.0, pow5(lightMap.x) * 15.0 - 5.0) * 0.3);
+    //torchLightMap = (pow2(lightMap.x) * 15.0 - 0.007) * (1.0 - metallic) * (1.0 + (1.0 - pow2(dot(normalize(upPosition), normal))));
+    //torchLightMap += max(0.0, pow5(lightMap.x - 0.14 * d) / 0.04 - 0.07);
+    //torchLightMap = max(torchLightMap, 0.0) * 0.25;
 
-  if(particlesColor.a > 0.01){
-    particlesColor.rgb = rgb2L(particlesColor.rgb);
+    torchLightMap = lightMap.x - 0.0625;
+    torchLightMap = pow5(torchLightMap) * 15.0 * (1.0 - metallic) * pow2((1.0 - abs(dot(normalize(upPosition), normal))) * 0.3 + 0.7) + pow5(torchLightMap * torchLightMap - 0.0625 * d) * 15.0;
 
-    normal = normalize(vP.xyz * vec3(1.0, 0.0, -1.0));
+    vec3 torchLighting = albedo.rgb * torchLightMap * 0.0549;
+         torchLighting = (heldLighting * 0.7 + torchLighting) * torchLightingColor * 1.42;
 
-    vec2 particlesLightMap = texture2D(colortex5, texcoord).xy;
-    torchLightMap = max(0.0, pow5(particlesLightMap.x) * 15.0 - 0.005 + max(0.0, pow5(particlesLightMap.x) * 15.0 - 5.0));
-    skyLightMap = max(pow2(particlesLightMap.y * 2.0) * 1.004 - 0.004, 0.0);
+    color += diffuse + max(vec3(0.0), torchLighting - color * 0.33);
 
-    smoothness = 0.001;
-    roughness  = pow2(1.0 - smoothness);
-    metallic   = 0.02;
-    emissive   = 0.0;
+    color += albedo.rgb * emissive;
 
-    if(particlesLightMap.y > 0.999) emissive = 1.0;
+    //color = vec3(sss) * 0.1;
 
-    F0 = vec3(metallic);
+    //color = vec3(step(length(vP.xyz), length(rePVector)) * 0.1);
 
-    shading = vec3(1.0);
+//color = torchLighting;
+    //color = vec3(preShadow) * 0.1;
 
-    color2  = particlesColor.rgb * skyLightingColorRaw * skyLightMap;
-    color2 += particlesColor.rgb * torchLightMap * torchLightingColor * 0.06;
-
-    vP = gbufferProjectionInverse * nvec4(vec3(texcoord, texture2D(depthtex0, texcoord).x) * 2.0 - 1.0); vP /= vP.w;
-    nvP = normalize(vP.xyz);
-/*
-    if(smoothness > 0.0){
-      nrP = normalize(reflect(nvP, normal));
-      vec3 h = normalize(nrP - nvP);
-
-      float ndotv = 1.0 - clamp01(dot(-nvP, normal));
-      float vdoth = 1.0 - clamp01(dot(-nvP, h));
-      float ndoth = clamp01(dot(normal, h));
-      float ndotl = clamp01(dot(nrP, normal));
-
-      vec3  f = F(F0, pow5(vdoth));
-      float d = DistributionTerm(roughness, ndoth);
-      float g = VisibilityTerm(d, ndotv, ndotl);
-
-      color2 *= rgb2L(vec3(1.0 - metallic));
-      color2 *= rgb2L(1.0 - f * clamp01(g * d));
-    }
-*/
-    //color2 += BRDF(particlesColor.rgb * (particlesColor.a * 0.999 + 0.001), normalize(shadowLightPosition), -nvP, normal, roughness, metallic, F0) * shading * sunLightingColorRaw * pow(fading, 5.0) * 3.0;
-    if(heldBlockLightValue > 1) color2 += BRDF(particlesColor.rgb * (particlesColor.a * 0.999 + 0.001), -nvP, -nvP, normal, roughness, metallic, F0) * torchLightingColor * pow2(clamp01((heldBlockLightValue - 5.0 - length(particlesP.xyz)) * 0.1));
-
-    if(isParticles){
-      id = 253;
-      albedo.a = max(albedo.a, particlesColor.a);
-      color = mix(color, color2, particlesColor.a * (1.0 - emissive));
-    }
+    //color = vec3(texture2D(shadowcolor0, texcoord).zzz * 0.1);
+    //color = vec3(pow5(texture2D(shadowcolor0, texcoord).z));
   }
 
   //color = particlesColor.rgb;
   //color = vec3(clamp01(length(vP.xyz) - length(particlesDepth)));
 
-  vec3 atmosphericScattering = CalculateSky(nvP, sP, cameraPosition.y, 0.5);
-       atmosphericScattering = CalculateAtmosphericScattering(atmosphericScattering, -(mat3(gbufferModelViewInverse) * nvP).y + 0.15);
-  color.rgb = mix(atmosphericScattering, color.rgb, clamp01(albedo.a));
+  if(albedo.a < 1.0){
+  vec3 skyWorldVector = mat3(gbufferModelViewInverse) * nvP;
 
-  color += emissive * mix(albedo.rgb, particlesColor.rgb, float(isParticles));
-  color2 = mix(color2, particlesColor.rgb, emissive);
+  vec3 atmosphericScattering = CalculateSky(nvP, sP, 500.0, 1.0);
+       //atmosphericScattering = CalculateAtmosphericScattering(atmosphericScattering, -skyWorldVector.y + 0.1);
+       atmosphericScattering = CalculateSun(atmosphericScattering, nvP, normalize(sunPosition), sunLightingColorRaw, skyWorldVector.y);
+  color.rgb = mix(atmosphericScattering, color.rgb, albedo.a);
+  }
 
-  //color2 = mix(color2, particlesColor.rgb, emissive);
+  //color += emissive * mix(albedo.rgb, particlesColor.rgb, float(isParticles));
   //color = mix(color, particlesColor.rgb / (0.04 + particlesColor.a), emissive * float(isParticles));
   //particlesColor.a = max(particlesColor, emissive);
 
@@ -391,7 +366,20 @@ void main() {
   //color += particlesColor.rgb * emissive * 0.7 / (0.04 + particlesColor.a) * float(isParticles);
 
   color = L2rgb(color);
-  color2 = L2rgb(color2);
+
+  if(!isSky){
+    color += albedo.rgb * vec3(0.2874, 0.2848, 0.4278) / (albedo.rgb + 0.001) * getLum(clamp01(albedo.rgb - color)) * 0.5 * nightVision;
+  }
+
+  //color = vec3(fading);
+  //if(fading > 0.99) color = vec3(1.0, 0.0, 0.0);
+
+  //color = vec3(dot(nvP, normalize((shadowLightPosition) + vP.xyz)));
+
+  color *= 1.0 / overRange;
+
+
+
 /*
   vec3 o = mat3(gbufferModelView) * wP.xyz;
 
@@ -487,7 +475,7 @@ void main() {
   //color = texture2D(shadowcolor0, shadowUV.xy).rgb * 0.33;
   //color = vP.xyz + wP.xyz;
 
-  //color = vec3(particlesDepth * 0.1);
+  //if(texcoord.x > 0.5) color = vec3(blockDistance * 1.01 - particlesDepth + 0.05 >= 0.0 && particlesColor.a > 0.001);
 
   //color = texture2D(colortex5, texcoord).rgb;
 
@@ -503,11 +491,10 @@ void main() {
   //if(particlesDepth >= blockDistance - 0.05) color = vec3(0.0);
   //color = vec3(clamp01(blockDistance - particlesDepth));
 
-/* DRAWBUFFERS:01456 */
-  gl_FragData[0] = vec4(mix(albedo.rgb, particlesColor.rgb, particlesColor.a), 0.0);
+/* DRAWBUFFERS:0125 */
+  gl_FragData[0] = vec4(albedo.rgb, 0.0);
   gl_FragData[1] = vec4(torchLightMap / 15.0, skyLightMap, texture2D(colortex1, texcoord).ba);
-  gl_FragData[2] = vec4(color2, particlesColor.a);
-  gl_FragData[3] = vec4(color, float(id < 254));
-  gl_FragData[4] = vec4(emissive, texture2D(depthtex2, texcoord).x, texture2D(colortex5, texcoord).z, 1.0);
+  gl_FragData[2] = vec4(normalData.xy, preShadow, 1.0);
+  gl_FragData[3] = vec4(color, 1.0);
 }
                                                                                            

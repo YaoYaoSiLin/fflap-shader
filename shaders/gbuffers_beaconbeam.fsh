@@ -1,21 +1,14 @@
-#version 120
+#version 130
 
 uniform sampler2D texture;
-uniform sampler2D gaux1;
-uniform sampler2D gaux3;
 
-uniform mat4 gbufferProjection;
+in vec2 texcoord;
+in vec2 lmcoord;
 
-uniform float far;
-uniform float near;
+in vec3 vP;
+in vec3 normal;
 
-varying vec2 texcoord;
-varying vec2 lmcoord;
-
-varying vec3 vP;
-varying vec3 normal;
-
-varying vec4 color;
+in vec4 color;
 
 vec3 nvec3(vec4 pos) {
     return pos.xyz / pos.w;
@@ -32,12 +25,18 @@ vec2 normalEncode(vec3 n) {
 }
 
 void main() {
-  vec4 tex = texture2D(texture, texcoord);
-       tex *= color;
+  vec4 albedo = texture2D(texture, texcoord);
+       albedo *= color;
 
-  if(tex.a < 0.001) discard;
+  albedo.rgb /= 1.0 + max(albedo.r, max(albedo.g, albedo.b)) * 3.0;
+  albedo.rgb *= 4.0;
 
-/* DRAWBUFFERS:45 */
-  gl_FragData[0] = tex;
-  gl_FragData[1] = vec4(lmcoord.x, 1.0, gl_FragCoord.z, 1.0); //disable torchlighting and skylighting, b is depth of beam
+  if(albedo.a < 0.05) discard;
+  albedo.a = 1.0;
+
+/* DRAWBUFFERS:0123 */
+  gl_FragData[0] = albedo;
+  gl_FragData[1] = vec4(0.0, 0.0, 0.0, 1.0);
+  gl_FragData[2] = vec4(normalEncode(normal), 1.0, 1.0);
+  gl_FragData[3] = vec4(1.0, 0.0, 1.0, 1.0);
 }

@@ -1,10 +1,10 @@
-#version 120
+#version 130
 
 uniform sampler2D texture;
 
-varying vec2 texcoord;
+in vec2 texcoord;
 
-varying vec4 color;
+in vec4 color;
 
 void main() {
   vec4 tex = texture2D(texture, texcoord) * color;

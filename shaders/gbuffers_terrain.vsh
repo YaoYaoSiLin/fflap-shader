@@ -16,6 +16,8 @@ uniform mat4 gbufferModelViewInverse;
 //out float cutoutBlock;
 
 out float id;
+out float leaves_type;
+out float lukewarm_plants;
 
 out vec2 texcoord;
 out vec2 lmcoord;
@@ -25,13 +27,23 @@ out vec3 tangent;
 out vec3 binormal;
 
 out vec3 vP;
+out vec3 viewVector;
 
 out vec4 color;
 
-#define Taa_Support 1
+#define Enabled_TAA
 
-#include "libs/jittering.glsl"
-#include "libs/taa.glsl"
+#ifdef Enabled_TAA
+  uniform int frameCounter;
+
+  uniform float viewWidth;
+  uniform float viewHeight;
+
+  vec2 resolution = vec2(viewWidth, viewHeight);
+  vec2 pixel = 1.0 / vec2(viewWidth, viewHeight);
+
+  #include "libs/jittering.glsl"
+#endif
 
 void main() {
   texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
@@ -40,19 +52,72 @@ void main() {
   color = gl_Color;
 
   vec4 position = gl_Vertex;
-  vP = (gl_ModelViewMatrix * gl_Vertex).xyz;
-  vec3 wP = mat3(gbufferModelViewInverse) * vP + cameraPosition;
-       //position = gbufferModelViewInverse * position;
-       //position.xyz += cameraPosition;
-  id = 0.0;
-  //cutoutBlock = 0.0;
 
-  normal  = normalize(gl_NormalMatrix * gl_Normal);
+  vP = (gl_ModelViewMatrix * position).xyz;
+  vec3 wP = mat3(gbufferModelViewInverse) * vP;
+
+  normal = normalize(gl_NormalMatrix * gl_Normal);
+  vec3 worldNormal = mat3(gbufferModelViewInverse) * normal;
+
+  viewVector = wP;
+
+  //if((mc_Entity.x == 64 && worldNormal.z > 0.05) || (mc_Entity.x == 65 && -worldNormal.z > 0.05)
+  //|| (mc_Entity.x == 66 && worldNormal.x > 0.05) || (mc_Entity.x == 67 && -worldNormal.x > 0.05))
+  //if(mc_Entity.x == 64)
+
+  if(worldNormal.x > 0.5){
+    if(mc_Entity.x == 66) viewVector.y = -viewVector.y;
+    if(mc_Entity.x == 92) viewVector.xz = -viewVector.xz;
+  }
+
+  if(worldNormal.x < -0.5){
+    if(mc_Entity.x == 67) viewVector.y = -viewVector.y;
+    if(mc_Entity.x == 92) viewVector.xz = -viewVector.xz;
+  }
+
+  if(worldNormal.y > 0.5){
+    if(mc_Entity.x == 93) viewVector.xy = -viewVector.xy;
+    if(mc_Entity.x == 94) viewVector.x = -viewVector.x;
+  }
+
+  if(worldNormal.z > 0.5){
+    if(mc_Entity.x == 64) viewVector.y = -viewVector.y;
+    if(mc_Entity.x == 91) viewVector.xz = -viewVector.xz;
+  }
+
+  if(worldNormal.z < -0.5){
+    if(mc_Entity.x == 65) viewVector.y = -viewVector.y;
+    if(mc_Entity.x == 91) viewVector.xz = -viewVector.xz;
+  }
+
+  //viewVector.y = -viewVector.y;
+
+  //viewVector.xyz = -viewVector.xyz;
+  //if((mc_Entity.x == 64 && worldNormal.z > 0.5) || (mc_Entity.x == 65 && -worldNormal.z > 0.5) || (mc_Entity.x == 66 && -worldNormal.x > 0.5) || (mc_Entity.x == 67 && worldNormal.x > 0.5)) viewVector.y = -viewVector.y;
+
+  viewVector = mat3(gbufferModelView) * viewVector;
+
+  //viewVector = mat3(gbufferModelView) * (wP * vec3(1.0, -1.0, 1.0));
+
+  //if(mc_Entity.x == 94 && worldNormal.y * worldNormal.y < 0.001) viewVector = mat3(gbufferModelView) * (wP * vec3(1.0, -1.0, 1.0));
+  //if(mc_Entity.x == 93 && worldNormal.y > 0.01) viewVector = mat3(gbufferModelView) * (wP * vec3(-1.0, -1.0, 1.0));
+  //if(mc_Entity.x == 92 && worldNormal.y > 0.01) viewVector = mat3(gbufferModelView) * (wP * vec3(-1.0, 1.0, 1.0));
+
+  wP += cameraPosition;
+
   tangent = normalize(gl_NormalMatrix * at_tangent.xyz);
   binormal = cross(tangent, normal);
 
+  id = 0.0;
+
   //if(mc_Entity.x == 11 || mc_Entity.x == 10) id = 10;
   //if(mc_Entity.x == 1) position.x += 1000;
+
+  //leaves_type = -1.0;
+  //if(mc_Entity.x > 1799 && mc_Entity.x < 1805) leaves_type = float(mc_Entity.x) - 1800.0;
+
+  //if(mc_Entity.x == 1800) leaves_type = 0.0;
+  //if(mc_Entity.x == 1803)
 
   bool leaves = mc_Entity.x == 18;
 
@@ -63,6 +128,9 @@ void main() {
   bool double_plant = double_plant_upper || double_plant_lower;
 
   bool unWaveingFarm = mc_Entity.x == 83;
+
+  //lukewarm_plants = 0.0;
+  //if(mc_Entity.x == 1800 || mc_Entity.x == 1802 || mc_Entity.x == 1803 || mc_Entity.x == 1804 || plant || double_plant || unWaveingFarm) lukewarm_plants = 1.0;
 
   //bool glazed_terracotta = mc_Entity.x == 235;
 
@@ -112,14 +180,14 @@ void main() {
 
   if(unWaveingFarm) id = 83.0;
 
-  if(mc_Entity.x == 35)  id = 35.0;
-  if(mc_Entity.x == 235) id = 235.0;
+  //if(mc_Entity.x == 35)  id = 35.0;
+  //if(mc_Entity.x == 235) id = 235.0;
 
   //position.xyz -= cameraPosition;
   //position = gbufferModelView * position;
 
   gl_Position = gl_ProjectionMatrix * gl_ModelViewMatrix * position;
   #ifdef Enabled_TAA
-  gl_Position.xy += haltonSequence_2n3[int(mod(frameCounter, 16))] * gl_Position.w * pixel;
+  gl_Position.xy += jittering * gl_Position.w * pixel;
   #endif
 }

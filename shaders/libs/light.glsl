@@ -90,9 +90,9 @@ float ScreenSpaceShadow(in vec3 lightPosition, in vec3 vP){
 
   float thickness = 0.125 - vP.z * 0.01;
 
-  float dither = R2sq(texcoord * resolution - vec2(frameCounter) * 0.0078);
+  float dither = R2sq(texcoord * resolution - vec2(frameCounter) * 0.0039);
 
-  vec3 lightVector = normalize(lightPosition) * 0.125;// * (3.0 + length(vP.xyz)) / shadowMapResolution * istep * 128.0
+  vec3 lightVector = normalize(lightPosition) * (3.0 + length(vP.xyz)) / shadowMapResolution * istep * 128.0;
   vec3 newVector = vP.xyz - lightVector * dither * 0.9;
 
   for(int i = 0; i < steps; i++){

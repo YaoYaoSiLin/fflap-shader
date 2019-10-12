@@ -88,12 +88,16 @@ float ScreenSpaceShadow(in vec3 lightPosition, in vec3 vP){
 
   float sss = 0.0;
 
-  float thickness = 0.125 - vP.z * 0.01;
+  float thickness = 0.0625 + 0.05 * (1024.0 / shadowMapResolution);
 
-  float dither = R2sq(texcoord * resolution - vec2(frameCounter) * 0.0039);
+  float dither = R2sq(texcoord * resolution - vec2(frameCounter * 0.05) - jittering);
 
-  vec3 lightVector = normalize(lightPosition) * (3.0 + length(vP.xyz)) / shadowMapResolution * istep * 128.0;
-  vec3 newVector = vP.xyz - lightVector * dither * 0.9;
+  vec3 lightVector = normalize(lightPosition) * istep;
+       lightVector = lightVector / shadowMapResolution * 700.0;// * max(3.0, length(vP.xyz));
+  vec3 newVector = vP.xyz - lightVector * vP.z * shadowMapResolution / 4096.0 * 0.125;
+
+  //lightVector *= 4.0;
+  newVector -= lightVector * dither;
 
   for(int i = 0; i < steps; i++){
     newVector += lightVector;
@@ -105,7 +109,7 @@ float ScreenSpaceShadow(in vec3 lightPosition, in vec3 vP){
 
     vec3 samplePosition = nvec3(gbufferProjectionInverse * nvec4(vec3(testCoord.xy, texture(depthtex0, testCoord.xy).x) * 2.0 - 1.0));
 
-    if(samplePosition.z < testPoint.z + thickness && samplePosition.z > testPoint.z) sss = 1.0;
+    if(samplePosition.z > testPoint.z && samplePosition.z < testPoint.z + thickness) sss = 1.0;
   }
 
   return 1.0 - sss;
@@ -136,7 +140,7 @@ vec4 CalculateShading(in sampler2DShadow mainShadowTex, in sampler2DShadow secSh
   shading = vec3(1.0);
 
   if(floor(shadowPosition.xyz) == vec3(0.0)){
-    float dither = R2sq(texcoord * resolution) * 2.0 * Pi;
+    float dither = R2sq(texcoord * resolution - (vec2(frameCounter) * 0.5 - jittering) * 0.05) * 2.0 * Pi;
     mat2 rotate = mat2(cos(dither), -sin(dither), sin(dither), cos(dither));
 
     #if Enabled_Soft_Shadow == OFF
@@ -200,14 +204,14 @@ vec4 CalculateShading(in sampler2DShadow mainShadowTex, in sampler2DShadow secSh
 
     //shading = vec3(penumbra * 1.0);
 
-    float radius = clamp(penumbra, 0.0625, 1.0) * 8.0;
+    float radius = clamp(penumbra, 0.0625, 2.0) * 8.0;
           //radius *= 0.129;
 
     //shadowPosition.xy += R2sq2[int(mod(frameCounter, 16))] * shadowPixel * 0.125;
 
     for(float i = -1.0; i <= 1.0; i += 1.0){
       for(float j = -1.0; j <= 1.0; j += 1.0){
-        vec2 coord = shadowPosition.xy + vec2(i, j) * rotate * bias * shadowPixel;
+        vec2 coord = shadowPosition.xy + (vec2(i, j) - vec2(j, i) * dither * 0.05) * rotate * bias * shadowPixel;
         shading += vec3(shadow2D(mainShadowTex, vec3(coord, shadowPosition.z - diffthresh)).x);
       }
     }
@@ -223,7 +227,7 @@ vec4 CalculateShading(in sampler2DShadow mainShadowTex, in sampler2DShadow secSh
 
     #ifdef Enabled_ScreenSpace_Shadow
       vec3 vP = mat3(gbufferModelView) * wP.xyz;
-      shading *= (ScreenSpaceShadow(normalize(shadowLightPosition), vP));
+      shading *= (ScreenSpaceShadow(shadowLightPosition, vP));
     #endif
 
     #if CalculateShadingColor == 1

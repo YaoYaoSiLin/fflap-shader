@@ -7,7 +7,7 @@
   #define cold_ocean 46
 
   #if !defined(default)
-  #define default 0
+  #define default 255
   #endif
 
   #define Water_Color_Test disable //[disable default swamp frozen_ocean_and_river warm_ocean lukewarm_ocean cold_ocean]
@@ -53,13 +53,10 @@
 vec4 CalculateWaterColor(in vec4 color){
   //color = vec4(color.rgb, 0.05);
 
-  color.a = (color.r + color.g) / (min(color.r, color.g) + 0.01) * (1.0 - color.b) * 0.5 / Pi + color.a;
+  color.a = (color.r + color.g) / (min(color.r, color.g) + 0.01) * (1.0 - color.b) * 0.25 / Pi;
+  //color.a = 0.01;
   //color.rgb = saturation(color.rgb, 1.0 + (min(color.r, color.g) - color.b)) / (maxComponent(color.rgb) * 0.2 + 0.8) * 1.1;
   //color.rgb = color.rgb * color.rgb;
 
   return color;
-}
-
-vec4 CalculateBlockScattering(in vec4 color){
-  return vec4(0.0);
 }

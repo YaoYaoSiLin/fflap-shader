@@ -43,7 +43,7 @@ const vec2 R2sq2[16] = vec2[16](vec2(0.2548776662466927, 0.06984029099805333),
 #define Jitter_Mode R2 //[halton R2]
 
 #if Jitter_Mode == halton
-#define jittering haltonSequence_2n3[int(mod(frameCounter, 16))]
+#define jittering (haltonSequence_2n3[int(mod(frameCounter, 16))])
 #elif Jitter_Mode == R2
-#define jittering R2sq2[int(mod(frameCounter, 16))]
+#define jittering (R2sq2[int(mod(frameCounter, 16))])
 #endif

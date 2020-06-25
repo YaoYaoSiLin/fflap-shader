@@ -25,10 +25,11 @@
 #define Temporal 1
 
 #define auto 0
-#define default 256
+#define default 255
 #define render_quality MC_RENDER_QUALITY
 
 const float Pi = 3.14159;
+const float invPi = 1.0 / Pi;
 const float e = 2.71828;
 const float playerEyeLevel = 1.62;
 const float dynamicLightHight = 1.62;
@@ -40,6 +41,11 @@ uniform float near;
 
 float sky = 1.0 - near / far / far;
 
+#define L2Gamma(c)  pow(vec3(c), vec3(2.2))
+#define G2Linear(c) pow(vec3(c), vec3(1.0 / 2.2))
+
+#define lerq(from, to, t) (from + (to - from) * t)
+
 float clamp01(float x){
   return clamp(x, 0.0, 1.0);
 }
@@ -47,6 +53,8 @@ float clamp01(float x){
 vec3 clamp01(vec3 x){
   return clamp(x, vec3(0.0), vec3(1.0));
 }
+
+#define saturate clamp01
 
 vec3 nvec3(vec4 pos) {
     return pos.xyz / pos.w;
@@ -96,6 +104,10 @@ float maxComponent( vec3 a ) {
     return max(a.x, max(a.y, a.z) );
 }
 
+#define CalculateMaskID(id, x) bool(step(id - 0.5, x) * step(x, id + 0.5))
+#define CalculateMaskIDVert(id, E) step(id - 0.5, E) * step(E, id + 0.5) * id
+#define CalculateMaskIDVert2(id, id2, E) step(id - 0.5, E) * step(E, id + 0.5) * id + step(id2 - 0.5, E) * step(E, id2 + 0.5) * id
+
 #ifdef Gaussian_Blur
   float gaussianBlurWeights(in float offset){
     float o = 0.83;
@@ -116,7 +128,7 @@ float maxComponent( vec3 a ) {
   }
 #endif
 
-vec3 saturation(in vec3 color, in float x){
+vec3 saturation(in vec3 color, in float s){
   float lum = dot03(color);
-  return (lum + (color - lum) * x);
+  return (lum + (color - lum) * s);
 }

@@ -38,33 +38,29 @@ vec2 bloomSamplOffset[8] = vec2[8](vec2(0.0),
 
 #if Stage == Bloom && defined(bloomSampler) && defined(Enabled_Bloom)
 //bloom sampler
-  vec3 GetBloom(in float x, in vec2 coord, in vec2 offset, in mat2 rotate){
+  vec3 GetBloom(in float x, in vec2 coord, in vec2 offset){
     vec3 bloom = vec3(0.0);
 
     float lod = exp2(1.0 + x);
 
-  	vec2 bloomCoord = (coord - offset + 0.0002) * lod;
+  	coord = (coord - offset + 0.0002) * lod;
 
-  	if(bloomCoord.x > -0.004 && bloomCoord.x < 1.004 && bloomCoord.y > -0.004 && bloomCoord.y < 1.004){
+  	if(coord.x > -0.004 && coord.x < 1.004 && coord.y > -0.004 && coord.y < 1.004){
 
       float weights = 0.0;
 
       int rounds = 0;
 
+      vec2 bloomCoord = coord * resolution / lod;
+
       for(float i = -1.0; i <= 1.0; i += 1.0){
     		for(float j = -1.0; j <= 1.0; j += 1.0){
   				vec2 offsets = vec2(i, j);
-          //float r = (1.0 + float(rounds) * 2.0 * 3.14159) / 9.0;
+          vec2 samplePos = (floor(bloomCoord + offsets + 1.5) - 1.0) * pixel * lod;
 
           float weight = gaussianBlurWeights(offsets);
-          //      weight = 1.0;
-          //offsets += vec2(cos(r), sin(r)) * (8.0 + lod) * 0.4;
-
-          //offsets -= offsets * (rotate) * lod * 0.0625;
-
-  				bloom += (texture2DLod(bloomSampler, bloomCoord + offsets * pixel * lod, lod * 0.24).rgb * weight);
+  				bloom += (texture2D(bloomSampler, samplePos).rgb * weight);
           weights += weight;
-          //rounds++;
   			}
   		}
 
@@ -77,18 +73,18 @@ vec2 bloomSamplOffset[8] = vec2[8](vec2(0.0),
   vec4 CalculateBloomSampler(in vec2 coord) {
     vec3 bloom = vec3(0.0);
 
-    float dither = bayer_32x32(coord, resolution) * 2.0 * Pi;
-
-    mat4 rotate = mat4(cos(dither), -sin(dither), 0.0, 0.0,
-                       sin(dither),  cos(dither), 0.0, 0.0,
-                       0.0, 0.0, 1.0, 0.0,
-                       0.0, 0.0, 0.0, 1.0);
-
     coord -= 0.004 * vec2(1.0, aspectRatio);
 
     for(int i = 0; i < int(Bloom_Steps); i++) {
-  		bloom += GetBloom(float(i), coord, bloomSamplOffset[i], mat2(rotate));
+  		bloom += GetBloom(float(i), coord, bloomSamplOffset[i]);
   	}
+    /*
+    bloom += GetBloom(0.0, coord, bloomSamplOffset[0]);
+    bloom += GetBloom(1.0, coord, bloomSamplOffset[1]);
+    bloom += GetBloom(2.0, coord, bloomSamplOffset[2]);
+    bloom += GetBloom(3.0, coord, bloomSamplOffset[3]);
+    bloom += GetBloom(4.0, coord, bloomSamplOffset[4]);
+    */
 
     return vec4(bloom, 1.0);
   }
@@ -107,8 +103,8 @@ vec2 bloomSamplOffset[8] = vec2[8](vec2(0.0),
       return w / 6.0;
   }
 
-  vec4 BicubicTexture(in sampler2D tex, in vec2 coord) {
-  	coord *= resolution;
+  vec4 BicubicTexture(in sampler2D tex, in vec2 coord, in vec2 texSize) {
+  	coord *= texSize;
     //coord = floor(coord + 0.5);
 
   	float fx = fract(coord.x);
@@ -126,15 +122,68 @@ vec2 bloomSamplOffset[8] = vec2[8](vec2(0.0),
     vec4 s = vec4(xcubic.x + xcubic.y, xcubic.z + xcubic.w, ycubic.x + ycubic.y, ycubic.z + ycubic.w);
     vec4 offset = c + vec4(xcubic.y, xcubic.w, ycubic.y, ycubic.w) / s;
 
-    vec4 sample0 = texture2D(tex, vec2(offset.x, offset.z) / resolution);
-    vec4 sample1 = texture2D(tex, vec2(offset.y, offset.z) / resolution);
-    vec4 sample2 = texture2D(tex, vec2(offset.x, offset.w) / resolution);
-    vec4 sample3 = texture2D(tex, vec2(offset.y, offset.w) / resolution);
+    vec4 sample0 = texture2D(tex, vec2(offset.x, offset.z) / texSize);
+    vec4 sample1 = texture2D(tex, vec2(offset.y, offset.z) / texSize);
+    vec4 sample2 = texture2D(tex, vec2(offset.x, offset.w) / texSize);
+    vec4 sample3 = texture2D(tex, vec2(offset.y, offset.w) / texSize);
 
     float sx = s.x / (s.x + s.y);
     float sy = s.z / (s.z + s.w);
 
     return mix( mix(sample3, sample2, sx), mix(sample1, sample0, sx), sy);
+  }
+
+  //from : https://gist.github.com/TheRealMJP/c83b8c0f46b63f3a88a5986f4fa982b1
+  vec4 SampleTextureCatmullRom(sampler2D tex, vec2 uv, vec2 texSize )
+  {
+      // We're going to sample a a 4x4 grid of texels surrounding the target UV coordinate. We'll do this by rounding
+      // down the sample location to get the exact center of our "starting" texel. The starting texel will be at
+      // location [1, 1] in the grid, where [0, 0] is the top left corner.
+      vec2 invtexSize = 1.0 / texSize;
+
+      vec2 samplePos = uv * texSize;
+      vec2 texPos1 = floor(samplePos - 0.5) + 0.5;
+
+      // Compute the fractional offset from our starting texel to our original sample location, which we'll
+      // feed into the Catmull-Rom spline function to get our filter weights.
+      vec2 f = samplePos - texPos1;
+
+      // Compute the Catmull-Rom weights using the fractional offset that we calculated earlier.
+      // These equations are pre-expanded based on our knowledge of where the texels will be located,
+      // which lets us avoid having to evaluate a piece-wise function.
+      vec2 w0 = f * ( -0.5 + f * (1.0 - 0.5*f));
+      vec2 w1 = 1.0 + f * f * (-2.5 + 1.5*f);
+      vec2 w2 = f * ( 0.5 + f * (2.0 - 1.5*f) );
+      vec2 w3 = f * f * (-0.5 + 0.5 * f);
+
+      // Work out weighting factors and sampling offsets that will let us use bilinear filtering to
+      // simultaneously evaluate the middle 2 samples from the 4x4 grid.
+      vec2 w12 = w1 + w2;
+      vec2 offset12 = w2 / (w1 + w2);
+
+      // Compute the final UV coordinates we'll use for sampling the texture
+      vec2 texPos0 = texPos1 - vec2(1.0);
+      vec2 texPos3 = texPos1 + vec2(2.0);
+      vec2 texPos12 = texPos1 + offset12;
+
+      texPos0 *= invtexSize;
+      texPos3 *= invtexSize;
+      texPos12 *= invtexSize;
+
+      vec4 result = vec4(0.0);
+      result += texture2D(tex, vec2(texPos0.x,  texPos0.y)) * w0.x * w0.y;
+      result += texture2D(tex, vec2(texPos12.x, texPos0.y)) * w12.x * w0.y;
+      result += texture2D(tex, vec2(texPos3.x,  texPos0.y)) * w3.x * w0.y;
+
+      result += texture2D(tex, vec2(texPos0.x,  texPos12.y)) * w0.x * w12.y;
+      result += texture2D(tex, vec2(texPos12.x, texPos12.y)) * w12.x * w12.y;
+      result += texture2D(tex, vec2(texPos3.x,  texPos12.y)) * w3.x * w12.y;
+
+      result += texture2D(tex, vec2(texPos0.x,  texPos3.y)) * w0.x * w3.y;
+      result += texture2D(tex, vec2(texPos12.x, texPos3.y)) * w12.x * w3.y;
+      result += texture2D(tex, vec2(texPos3.x,  texPos3.y)) * w3.x * w3.y;
+
+      return result;
   }
 
   void CalculateBloom(inout vec3 color, in vec2 coord){
@@ -144,82 +193,25 @@ vec2 bloomSamplOffset[8] = vec2[8](vec2(0.0),
     float weights = 0.0;
 
     for(int i = 0; i < int(Bloom_Steps); i++){
-      float lod = exp2(1.0 + i);
+      float lod = 1.0 / exp2(1.0 + i);
 
-      //vec2 bloomCoord = (coord / lod) - (vec2((1.0 / lastSalce) * 1.1 - 1.1, 0.0)) + offset;
-      vec2 bloomCoord = (coord) / lod + bloomSamplOffset[i] + 0.004 * vec2(1.0, aspectRatio);
+      vec2 bloomCoord = (coord) * lod + bloomSamplOffset[i] + 0.004 * vec2(1.0, aspectRatio);
 
-      float weight = gaussianBlurWeights(float(i));
-      bloom += BicubicTexture(bloomSampler, bloomCoord).rgb / (1.0 + weight);
+      //if(i != Bloom_Steps - 1) continue;
+
+      float weight = gaussianBlurWeights(float(i) / float(Bloom_Steps) + 0.0001);
+      vec3 sampler = clamp01(SampleTextureCatmullRom(bloomSampler, bloomCoord, resolution).rgb);
+
+      bloom += (sampler) * weight;
       weights += weight;
-
-      //if(((1.0 - pixel.x) + ((1.0 / lastSalce) * 1.1 - 1.1) * Bloom_Sample_Scale) * lod / Bloom_Sample_Scale < 1.0){
-      //  //return vec3(coord, 0.0);
-      //  bloomCoord = (coord - (offset * 2.0 + vec2(-(1.0 / fristSampleScale), 1.0 / fristSampleScale) - vec2((1.0 / lastSalce) * 1.1 - 1.1, 0.0)) * Bloom_Sample_Scale) * lod / Bloom_Sample_Scale;
-      //}
-
     }
 
-    //bloom *= overRange;
-    //bloom /= weights;
+    bloom /= weights;
 
-    //bloom = texture2D(bloomSampler, coord).rgb * 16.0;
+    bloom = rgb2L(bloom * overRange);
+    bloom *= 0.026 + dot(bloom, vec3(0.3847, 0.5642, 1.0)) * 0.5131;
+    //bloom = pow(bloom, vec3(0.6));
 
-    bloom = rgb2L(bloom) * overRange * overRange;
-    //bloom *= pow(overRange, 2.2);
-
-    //if(isEyeInWater == 1) color = mix(bloom, color, abs(getLum(bloom) - getLum(color)));
-    //if(coord.x < 0.5) color = rgb2L(BicubicTexture(bloomSampler, coord).rgb * );
-
-    //bloom /= Bloom_Steps;
-
-    //color = bloom;
-
-    float lum = 1.0 + dot(bloom, vec3(0.7874, 0.2848, 0.9278));
-
-    color += bloom * 0.333 * lum * 0.02;
-
-    //color = bloom;
-
-    //color = BicubicTexture(colortex, coord).rgb;
-
-    //bloom *= lum;
-
-    //color += bloom * overRange * 100.0 * lum;
-
-    //bloom *= lum;
-    //color += clamp01(bloom + (bloom - color)) * lum * 0.0333;
-
-    //color += clamp01(bloom - color) * 0.033 * lum;
-
-
-    //color = texture2D(bloomSampler, coord).rgb;
-
-    //bloom *= lum * 75.0;
-    //color += clamp01(bloom - color) * lum * 7.0;
-
-    //color += clamp01(bloom + (bloom - color) * 0.75);
-
-
-    //color += bloom + clamp(bloom - color, -bloom, bloom);
-
-    //color *= 3.0;
-
-    //bloom /= float(Bloom_Steps);
-    //bloom = (bloom * 65535);
-    //color = mix(color, bloom * 65535, 0.0007);
-    //color = rgb2L(BicubicTexture(bloomSampler, coord).rgb) * 65535 * 0.01;
-    //color += bloom * (1.0 + clamp01(getLum(color * 10.0 - bloom))) * 255.;
-    //color += bloom * 4.0;
-    //color = rgb2L(BicubicTexture(bloomSampler, coord).rgb) * 65535.0;
-
-    //color += mix(bloom, color, 0.000001);
-    //color = mix(color, bloom, 0.0152);
-    //color += bloom * 0.0152;
-
-    //color = mix(color, bloom, 0.001);
-
-    //color += bloom;
-    //color = rgb2L(texture2D(bloomSampler, coord).rgb);
+    color = (bloom) * 3.0;
   }
 #endif

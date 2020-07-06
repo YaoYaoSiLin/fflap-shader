@@ -29,7 +29,7 @@ in vec3 skyLightingColorRaw;
 
 in vec2 texcoord;
 
-/* DRAWBUFFERS:5 */
+/* DRAWBUFFERS:25 */
 
 vec2 resolution = vec2(viewWidth, viewHeight);
 
@@ -279,9 +279,18 @@ void CalculateSSS(inout vec3 color, in vec3 rayOrigin, in vec3 rayDirection, in 
 
 }
 
+vec2 normalEncode(vec3 n) {
+    vec2 enc = normalize(n.xy) * (sqrt(-n.z*0.5+0.5));
+    enc = enc*0.5+0.5;
+    return enc;
+}
+
 void main(){
   vec4 color = texture2D(gaux2, texcoord);
        color.rgb *= overRange;
+
+  float alpha = texture2D(composite, texcoord).x;
+  vec4 albedo = texture2D(gcolor, texcoord);
 
   float depth = texture(depthtex0, texcoord).x;
   vec3 viewPosition = nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, depth) * 2.0 - 1.0));
@@ -290,9 +299,10 @@ void main(){
   float viewLength = length(viewPosition);
 
   vec3 normal = normalDecode(texture2D(gnormal, texcoord).xy);
+  vec3 normalSurface = normalDecode(texture2D(composite, texcoord).xy);
 
-  float alpha = texture2D(composite, texcoord).x;
-  vec4 albedo = texture2D(gcolor, texcoord);
+  vec3 normalVisible = normal;
+  if(!bool(albedo.a) && dot(normalSurface, normalize(viewPosition)) < 0.1) normalVisible = normalSurface;
 
   float mask = round(texture2D(gdepth, texcoord).z * 255.0);
   bool isSky = bool(step(254.5, mask));
@@ -300,7 +310,8 @@ void main(){
   bool isGlass = CalculateMaskID(20, mask);
   bool isGlassPane = CalculateMaskID(106, mask);
 
-  float metallic = texture2D(composite, texcoord).b;
+  float smoothness = texture(gnormal, texcoord).b;
+  float metallic = texture(composite, texcoord).b;
 
   vec3 F0 = vec3(max(0.02, metallic));
        F0 = mix(F0, albedo.rgb, step(0.5, metallic));
@@ -432,5 +443,6 @@ void main(){
   color.a = max(albedo.a, float(!isSky));
   color.rgb /= overRange;
 
-  gl_FragData[0] = color;
+  gl_FragData[0] = vec4(smoothness, metallic, normalEncode(normalVisible));
+  gl_FragData[1] = color;
 }

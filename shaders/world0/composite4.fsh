@@ -36,13 +36,33 @@ in vec4 eyesWaterColor;
 const bool gaux3Clear = false;
 
 vec2 resolution = vec2(viewWidth, viewHeight);
-vec2 pixel      = 1.0 / vec2(viewWidth, viewHeight);;
+vec2 pixel      = 1.0 / vec2(viewWidth, viewHeight);
 
 #define Gaussian_Blur
 
 #include "../libs/common.inc"
 #include "../libs/dither.glsl"
 #include "../libs/jittering.glsl"
+
+vec3 KarisToneMapping(in vec3 color){
+	float a = 0.00002;
+	float b = float(0xfff) / 65535.0;
+
+	float luma = maxComponent(color);
+
+	if(luma > a) color = color/luma*((a*a-b*luma)/(2.0*a-b-luma));
+	return color;
+}
+
+vec3 invKarisToneMapping(in vec3 color){
+	float a = 0.002;
+	float b = float(0x2fff) / 65535.0;
+
+	float luma = maxComponent(color);
+
+	if(luma > a) color = color/luma*((a*a-(2.0*a-b)*luma)/(b-luma));
+	return color;
+}
 
 vec3 normalDecode(vec2 enc) {
     vec4 nn = vec4(2.0 * enc - 1.0, 1.0, -1.0);
@@ -80,6 +100,7 @@ void CalculateBRDF(out vec3 f, out float g, out float d, in float roughness, in 
 	f = F(F0, vdoth);
 	d = DistributionTerm(roughness, ndoth);
 	g = VisibilityTerm(d, ndotv, ndotl);
+	//g /= 4.0 * max(0.0, dot(normal, L)) * max(0.0, dot(normal, view));
 }
 
 vec2 GetMotionVector(in vec3 coord){
@@ -94,7 +115,7 @@ vec2 GetMotionVector(in vec3 coord){
 
   vec2 velocity = coord.xy - view.xy;
 
-  if(texture(depthtex0, texcoord).x < 0.7) velocity *= 0.0001;
+  if(texture(depthtex0, texcoord).x < 0.7) velocity *= 0.001;
 
   return velocity;
 }
@@ -145,18 +166,18 @@ vec4 ReprojectSampler(in sampler2D tex, in vec2 pixelPos){
   vec4 result = vec4(0.0);
   float weights = 0.0;
 
-  for(float i = -1.0; i <= 1.0; i += 1.0){
-    for(float j = -1.0; j <= 1.0; j += 1.0){
-      vec2 samplePos = pixelPos + vec2(i, j) * pixel * 0.159;
+  int steps = 8;
+  float invsteps = 1.0 / float(steps);
 
-      vec4 sampler = texture2D(tex, samplePos);
+  for(int i = 0; i < steps; i++){
+    float r = float(i) * invsteps * 2.0 * Pi;
+    vec2 samplePos = vec2(cos(r), sin(r));
+    float weight = gaussianBlurWeights(samplePos + 0.0001);
+    samplePos = samplePos * pixel + pixelPos;
 
-      float weight = gaussianBlurWeights(vec2(i, j) * 0.159 + 0.0001);
-
-      result += sampler * weight;
-
-      weights += weight;
-    }
+    vec4 sampler = texture2D(tex, samplePos);
+    result += sampler * weight;
+    weights += weight;
   }
 
   result /= weights;
@@ -165,27 +186,51 @@ vec4 ReprojectSampler(in sampler2D tex, in vec2 pixelPos){
   return result;
 }
 
-vec3 GetClosest(in vec2 coord){
+vec3 GetClosestRayDepth(in vec2 coord){
   vec3 closest = vec3(0.0, 0.0, 1.0);
 
   for(float i = -1.0; i <= 1.0; i += 1.0){
     for(float j = -1.0; j <= 1.0; j += 1.0){
-      vec2 neighborhood = vec2(i, j) * pixel;
+      vec2 neighborhood = vec2(i, j) * pixel * SSR_Rendering_Scale;
+      //float neighbor = texture(depthtex0, texcoord).x;
       float neighbor = texture2D(gaux1, coord * SSR_Rendering_Scale + neighborhood).a;
 
       if(neighbor < closest.z){
         closest.z = neighbor;
-        closest.xy = neighborhood / SSR_Rendering_Scale;
+        closest.xy = neighborhood;
       }
     }
   }
 
-  closest.xy = coord;
+  closest.xy += coord;
 
   return closest;
 }
 
-void CalculateReflection(inout vec3 reflection, in vec2 coord){
+vec3 GetClosest(in vec2 coord, in float scale){
+  vec3 closest = vec3(0.0, 0.0, 1.0);
+
+	coord *= scale;
+
+  for(float i = -1.0; i <= 1.0; i += 1.0){
+    for(float j = -1.0; j <= 1.0; j += 1.0){
+      vec2 neighborhood = vec2(i, j) * pixel * scale;
+      //float neighbor = texture(depthtex0, texcoord).x;
+      float neighbor = texture2D(gaux1, coord + neighborhood).a;
+
+      if(neighbor < closest.z){
+        closest.z = neighbor;
+        closest.xy = neighborhood;
+      }
+    }
+  }
+
+  closest.xy += coord;
+
+  return closest;
+}
+
+vec3 CalculateReflection(in sampler2D sampler, in vec3 currentColor, in vec2 coord){
   vec2 coord_jittering = coord + jittering * pixel;
 
   vec3 minColor = vec3(1.0);
@@ -194,14 +239,14 @@ void CalculateReflection(inout vec3 reflection, in vec2 coord){
   for(float i = -1.0; i <= 1.0; i += 1.0){
     for(float j = -1.0; j <= 1.0; j += 1.0){
       vec2 offset = vec2(i, j) * pixel;
-      vec3 color = RGB_YCoCg(texture2D(gaux1, coord_jittering + offset).rgb);
+      vec3 color = RGB_YCoCg(texture2D(sampler, coord_jittering + offset).rgb);
 
       minColor = min(minColor, color);
       maxColor = max(maxColor, color);
     }
   }
 
-  vec3 closest = GetClosest(texcoord);
+  vec3 closest = GetClosestRayDepth(texcoord);
   //     closest.xy = texcoord.xy + vec2(0.01);
   //float border = float(floor(closest.xy) == vec2(0.0));
 
@@ -212,25 +257,35 @@ void CalculateReflection(inout vec3 reflection, in vec2 coord){
         //weight -= motionScale * 0.074999;
 				//weight *= float(floor(previousCoord) == vec2(0.0));
 
-  vec3 currentColor = RGB_YCoCg(texture2D(gaux1, coord_jittering).rgb);
+  //vec3 currentColor = RGB_YCoCg(texture2D(sampler, coord_jittering).rgb);
+	currentColor = RGB_YCoCg(currentColor);
+  vec3 previousColor = RGB_YCoCg(ReprojectSampler(gaux3, previousCoord).rgb);
 
-  vec3 previousColor = RGB_YCoCg(texture2D(gaux3, previousCoord).rgb);
-       previousColor = clipToAABB(previousColor, minColor, maxColor);
+	//minColor = mix(minColor, previousColor, 0.9);
+	//maxColor = mix(maxColor, previousColor, 0.9);
 
-  vec3 weightA = vec3(0.001);
+	//minColor = min(minColor, mix(previousColor, currentColor, 0.5));
+	//maxColor = max(maxColor, mix(previousColor, currentColor, 0.5));
+
+  previousColor = clipToAABB(previousColor, minColor, maxColor);
+
+  vec3 weightA = vec3(0.015);
   vec3 weightB = vec3(1.0 - weightA);
-  /*
-  vec3 blend = clamp01(abs(maxColor - minColor) / currentColor);
-  weightB = lerq(vec3(0.99), vec3(0.999), blend);
-  weightA = 1.0 - weightB;
-  */
+
+  //vec3 blend = clamp01(abs(maxColor - minColor) / currentColor);
+  //weightB = lerq(vec3(0.9), vec3(0.985), blend);
+  //weightA = 1.0 - weightB;
 
   //weightB = mix(vec3(0.97), vec3(0.999), clamp01((maxColor - minColor) / currentColor));
   //weightA = 1.0 - weightB;
 
   //reflection = (0.001 * currentColor + 0.999 * previousColor);
+	vec3 reflection = vec3(0.0);
   reflection = (currentColor * weightA + previousColor * weightB);
   reflection = YCoCg_RGB(reflection);
+
+	return reflection;
+  //reflection = texture2D(gaux1, texcoord * 0.5).rgb;
 
   //reflection = clipToAABB(previousColor, minColor, maxColor);
   //reflection = mix(reflection, previousColor, weight);
@@ -238,8 +293,72 @@ void CalculateReflection(inout vec3 reflection, in vec2 coord){
   //reflection += (reflection - previousColor) * 0.0025;
 }
 
+vec3 SpecularReflectionResolve(in vec2 coord){
+	int steps = 4;
+	float invsteps = 1.0 / float(steps);
+
+	vec3 color;
+	float totalWeight;
+
+	float dither = R2sq(texcoord * resolution);
+
+	for(int i = 0; i < steps; i++){
+		float r = (1.0 + float(i)) * invsteps * 2.0 * Pi;
+		vec2 samplePosition = vec2(cos(r), sin(r));
+	//for(int i = -1; i <= 2; i++){
+	//	for(int j = -1; j <= 2; j++){
+	//		vec2 samplePosition = vec2(i, j);
+				 samplePosition = samplePosition * pixel * SSR_Rendering_Scale + coord;
+
+		vec3 sampleColor = texture2D(gaux1, samplePosition).rgb;
+
+		float weight = texture(composite, samplePosition).x;
+
+		color += sampleColor * weight;
+		totalWeight += weight;
+//	}
+	}
+
+	color /= totalWeight;
+
+	return color;
+}
+
+vec4 SpecularReflectionResolve(in sampler2D sampler, in vec2 coord){
+	int steps = 4;
+	float invsteps = 1.0 / float(steps);
+
+	vec4 color;
+	float totalWeight;
+
+	float dither = R2sq(texcoord * resolution);
+
+	for(int i = 0; i < steps; i++){
+		float r = (1.0 + float(i)) * invsteps * 2.0 * Pi;
+		vec2 samplePosition = vec2(cos(r), sin(r));
+	//for(int i = -1; i <= 2; i++){
+	//	for(int j = -1; j <= 2; j++){
+	//		vec2 samplePosition = vec2(i, j);
+				 samplePosition = samplePosition * pixel * SSR_Rendering_Scale + coord;
+
+		vec4 sampleColor = texture2D(sampler, samplePosition);
+
+		float weight = texture(composite, samplePosition).x;
+
+		color += sampleColor * weight;
+		totalWeight += weight;
+	//	}
+	}
+
+	color /= totalWeight;
+	//color *= invsteps;
+
+	return color;
+}
+
 void main() {
-	vec2 coord = texcoord * SSR_Rendering_Scale;
+	vec2 coord = texcoord;
+			 coord = GetClosest(coord, SSR_Rendering_Scale).st;
 	vec2 unjitterUV = texcoord + jittering * pixel;
 
 	vec3 albedo = texture2D(gcolor, texcoord).rgb;
@@ -247,8 +366,8 @@ void main() {
   vec3 normalSurface = normalDecode(texture2D(composite, texcoord).xy);
   vec3 normalVisible = normalDecode(texture2D(gnormal, texcoord).xy);
 
-	float smoothness = texture2D(gnormal, texcoord).b;
-	float metallic   = texture2D(composite, texcoord).b;
+	float smoothness = texture2D(gnormal, texcoord).r;
+	float metallic   = texture2D(gnormal, texcoord).g;
 	float roughness  = 1.0 - smoothness;
 				roughness  = roughness * roughness;
 
@@ -262,45 +381,29 @@ void main() {
 
   float viewLength = length(vP.xyz);
 
-  float ndotv = dot(nvP, normalSurface);
-  if(-0.15 > ndotv) normalVisible = normalSurface;
-  vec3 normal = normalVisible;
+  vec3 normal = normalDecode(texture2D(gnormal, texcoord).zw);
 
 	vec3 nreflectVector = normalize(reflect(nvP, normal));
+	vec3 rayOrigin = SpecularReflectionResolve(composite, texcoord * 0.5).gba * 2.0 - 1.0;
 
 	vec3 color = texture2D(gaux2, texcoord).rgb;
-
-	vec3 reflection = vec3(0.0);
-	CalculateReflection(reflection, coord);
-  //reflection = color*overRange;
-
-  vec3 antialiased = reflection;
 
 	float g = 0.0;
 	float d = 0.0;
 	vec3 f = vec3(0.0);
 	CalculateBRDF(f, g, d, roughness, metallic, F0, normal, -nvP, nreflectVector);
-	float brdf = clamp01(g * d);
+	float brdf = max(0.0, g * d);
+	//f = F(F0, pow5(1.0 - max(0.0, dot(normalize(nreflectVector-nvP), -nvP))));
 
-	reflection = mix(color, reflection, brdf);
-  reflection *= brdf * f;
+	vec3 reflection = texture2D(gaux1, coord).rgb;
+			 //reflection = SpecularReflectionResolve(coord);
+			 reflection = CalculateReflection(gaux1, reflection, coord);
 
-  //color = vec3(0.0);
-  /*
-  if(isEyeInWater == 1){
-  float scatteringFactor = 1.0 - min(1.0, exp(-eyesWaterColor.a * viewLength * Pi));
-  reflection = reflection * (1.0 - scatteringFactor);
+  vec3 antialiased = reflection;
+	reflection *= f;
 
-  vec3 absorption = min(1.0, eyesWaterColor.a * viewLength * Pi) * (1.0 - eyesWaterColor.rgb);
-       absorption = 1.0 - exp(-(absorption));
-  reflection -= reflection * absorption;
-  }
-*/
+  //reflection = KarisToneMapping(reflection);
 	color += reflection / overRange * step(texture(gdepth, texcoord).z, 0.999);
-  //color = texture2D(gaux1, texcoord*0.5).rgb / overRange;
-
-  //if(checker < 0.5) color = vec3(0.0);
-
 
 /* DRAWBUFFERS:56 */
   gl_FragData[0] = vec4(color, 1.0);

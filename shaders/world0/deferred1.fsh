@@ -1,6 +1,6 @@
 #version 130
 
-#define GI_Rendering_Scale 0.5
+#define GI_Rendering_Scale 0.353553
 
 #define SHADOW_MAP_BIAS 0.9
 
@@ -201,7 +201,28 @@ float Gather1(in sampler2D tex, in vec2 coord){
   return sampler;
 }
 
-const bool colortex5MipmapEnabled = false;
+//vec2 fragCoord = floor(texcoord * resolution * GI_Rendering_Scale);
+//float checkerBoard = (mod(fragCoord.x + fragCoord.y, 2));
+/*
+vec3 GetShadowNormal(in vec2 coord, in float checkerBoard){
+  coord.x += pixel.x * checkerBoard;
+  return (texture2D(gaux2, coord).xyz * 2.0 - 1.0);
+}
+
+float GetShadowDepth(in vec2 coord, in float checkerBoard){
+  coord.x += pixel.x * checkerBoard;
+  return texture2D(gaux2, coord).a;
+}
+
+vec3 GetShadowAlbedo(in vec2 coord, in float checkerBoard){
+  coord.x += pixel.x * (1.0 - checkerBoard);
+
+  vec3 albedo = texture2D(gaux2, coord).rgb;
+  albedo = normalize(albedo) * sqrt(getLum(albedo));
+
+  return albedo;
+}
+*/
 
 vec3 GetShadowNormal(in vec2 coord){
   return (texture2D(gaux2, coord + vec2(0.5, 0.0)).xyz * 2.0 - 1.0);
@@ -213,64 +234,32 @@ float GetShadowDepth(in vec2 coord){
 
 vec3 GetShadowAlbedo(in vec2 coord){
   vec3 albedo = texture2D(gaux2, coord).rgb;
-       albedo = normalize(albedo) * sqrt(getLum(albedo));
+       albedo = normalize(albedo) * (getLum(albedo));
 
   return albedo;
 }
 
-void CalculateRSM(inout vec3 shadowMapColor, in vec3 shadowPosition, in vec2 offset, in vec3 shadowSpaceNormal, in vec3 shadowSpaceLightDirection, inout float totalWeight){
+void CalculateRSM(inout vec3 shadowMapColor, in vec3 shadowPosition, in vec2 offset, in vec3 shadowSpaceNormal, in vec3 shadowSpaceLightDirection, inout float totalWeight, in float checkerBoard){
   float maxRadius = 8.0;
 
   float radius = 0.0003 * maxRadius;
 
   vec3 testPosition = shadowPosition + vec3(offset * radius, 0.0);
+  //vec2 coord = floor(testPosition.xy * resolution) * pixel - pixel * 0.5;
   vec2 coord = round(testPosition.xy * resolution * 0.5) * pixel;
 
   vec3 albedo = GetShadowAlbedo(coord);
   vec3 normal = GetShadowNormal(coord);
   float depth = GetShadowDepth(coord);
-
-  //shadowPosition.xyz = mat3(shadowProjectionInverse) * (shadowPosition.xyz * 2.0 - 1.0);
-  //vec3 position = mat3(shadowProjectionInverse) * (vec3(testPosition.xy, depth) * 2.0 - 1.0);
-  //     position = position - shadowPosition;
-  //     //position.z *= 4.0;
-
-  /*
-  normal.xy *= -1.0;
-  vec3 position = vec3(shadowPosition.xy + offset, depth) - shadowPosition.xyz;
-       position.z *= -255.0;
-       //position.z = clamp(position.z, -10.0, 10.0);
-       position = mat3(shadowProjectionInverse) * position;
-  vec3 direction = normalize(position);
-
-  position.xy *= max(1.0, sqrt(position.z * position.z) * 0.5);
-
-  float l = length(position.xyz * radius * 0.001);
-        l = max(1.0, l * l * l * l);
-        //l += 0.01;
-
-        shadowSpaceNormal.xy *= -1.0;
-
-
-  //float l = max(length(position.xyz * radius * vec3(0.001, 0.001, pow(0.001, 0.5))), 0.08);
-  //      l = l * l * l * l;
-        //l = max(0.001, l);
-
-  float ndotl = max(0.0, dot(normal, direction));
-        ndotl = max(0.0, dot(shadowSpaceNormal, -direction));
-        //ndotl *= clamp01(dot(shadowSpaceNormal, -direction));
-        */
+  //vec3 albedo = GetShadowAlbedo(coord, checkerBoard);
+  //vec3 normal = GetShadowNormal(coord, checkerBoard);
+  //float depth = GetShadowDepth(coord, checkerBoard);
 
   vec3 position = vec3(shadowPosition.xy + offset, depth) - shadowPosition.xyz;
-  //if(position.z + 0.0001 > 0.0){}else return;
-  //if(position.z < 0.005) return;
-
        position.z = position.z * 512.0 - 1.0;
-       //position.z = sign(position.z);
        position = mat3(shadowProjectionInverse) * position;
 
   vec3 direction = normalize(position);
-
 
   position *= 0.1;
   float l = length(position.xyz * radius);
@@ -306,6 +295,12 @@ vec3 CalculateCoarseRSM(in vec3 viewPosition, in vec3 normal){
   shadowPosition.xyz = shadowPosition.xyz * 0.5 + 0.5;
   shadowPosition.z -= 0.003;
 
+  vec2 fragCoord = floor(shadowPosition.xy * resolution);
+  float checkerBoard = mod(fragCoord.x + fragCoord.y, 2);
+
+  //shadowPosition.xy = floor(shadowPosition.xy * resolution) * pixel - pixel * 0.5;
+  //shadowMapColor = GetShadowNormal(shadowPosition.xy, checkerBoard);
+
 
   //float dither = R2sq(texcoord.xx * resolution * 0.5);
   float dither = R2sq(texcoord * resolution * 0.353553);
@@ -319,12 +314,28 @@ vec3 CalculateCoarseRSM(in vec3 viewPosition, in vec3 normal){
 
     //if(i != 10) continue;
 
-    CalculateRSM(shadowMapColor, shadowPosition.xyz, offset, shadowSpaceNormal, shadowSpaceLight, totalWeight);
+    CalculateRSM(shadowMapColor, shadowPosition.xyz, offset, shadowSpaceNormal, shadowSpaceLight, totalWeight, checkerBoard);
   }
 
   shadowMapColor /= max(1.0, totalWeight);
   shadowMapColor *= 0.125;
+
+
+  //shadowPosition.x -= pixel.x;
+  //shadowPosition.x += checkerBoard * pixel.x;
+
+  //vec2 fragCoord = floor(shadowPosition.xy * resolution);
+  //float checkerBoard = mod(fragCoord.x + fragCoord.y, 2);
+
+  //shadowPosition.x -= pixel.x;
+  //shadowPosition.x += pixel.x * checkerBoard;
+  //shadowMapColor = texture2D(gaux2, shadowPosition.xy).rgb;
   //shadowMapColor = shadowSpaceNormal;
+
+  //shadowPosition.xy = floor(shadowPosition.xy * resolution) * pixel - pixel * 0.5;
+  //shadowPosition.x += pixel.x;
+
+  //shadowMapColor = texture2D(gaux2, shadowPosition.xy).rgb;
 
   /*
   for(int i = 0; i < 32; ++i){

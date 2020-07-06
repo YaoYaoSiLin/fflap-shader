@@ -118,7 +118,7 @@ void main() {
     albedo = biomesColor;
     albedo = CalculateWaterColor(albedo);
 
-    smoothness = 0.9;
+    smoothness = 0.99;
     metallic = 0.02;
     blockDepth = min(255.0, length(vPSolidBlock - vP));
   }

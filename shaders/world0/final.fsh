@@ -286,7 +286,7 @@ void main(){
 
 			colorIndex *= 0.125;
 
-			color += (color - colorIndex) * 0.0025 * TAA_Post_Sharpen;
+			//color += (color - colorIndex) * 0.0025 * 500.0;
 			color = clamp01(color);
 		#endif
 

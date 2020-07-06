@@ -53,7 +53,12 @@ out float skyDustFactor;
 #ifdef Gen_Water_Color
 out vec4 eyesWaterColor;
 #endif
-
+/*
+#ifdef RefctionsDirection
+uniform int frameCounter;
+out vec3 normalSample;
+#endif
+*/
 void main(){
   gl_Position = ftransform();
   texcoord = gl_MultiTexCoord0.st;
@@ -142,4 +147,11 @@ void main(){
       //skyLightingColor *= min(1.0, (1.0 - dustFactor) * 1.0);
     #endif
   #endif
+  /*
+  #ifdef RefctionsDirection
+  float r = (1.0 + (mod(frameCounter, 8))) * 0.125 * 2.0 * 3.14159;
+  normalSample = vec3(cos(r), sin(r), 1.0);
+  //normalSample.z = 1.0 - dot(normalSample.xy, normalSample.xy);
+  #endif
+  */
 }

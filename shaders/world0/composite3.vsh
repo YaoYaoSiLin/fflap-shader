@@ -5,4 +5,5 @@
 #define Gen_Water_Color
 #define Gen_TnR
 #define Void_Sky
+#define RefctionsDirection
 #include "../program/composite.vsh"

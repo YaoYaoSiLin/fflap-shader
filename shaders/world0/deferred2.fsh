@@ -1,5 +1,7 @@
 #version 130
 
+#define GI_Rendering_Scale 0.5
+
 #define composite colortex3
 #define gaux2 colortex5
 

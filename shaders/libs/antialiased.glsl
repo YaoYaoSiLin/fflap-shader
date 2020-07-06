@@ -125,9 +125,13 @@
      return y / 6.0f;
   }
 
+  #define Gaussian_Sharpen 0
+  #define Bicubic 1
+  #define HistorySamplerFitlter Gaussian_Sharpen
+
   vec4 ReprojectSampler(in sampler2D tex, in vec2 pixelPos){
     vec4 result = vec4(0.0);
-
+    /*
     float weights = 0.0;
 
     //vec2 velocity = pixelPos - texcoord - jittering * pixel;
@@ -146,7 +150,7 @@
     }
 
     result /= weights;
-
+    */
     /*
     sum = texture2D(tex, pixelPos);
     sum.rgb = RGB_YCoCg(sum.rgb);
@@ -268,7 +272,25 @@
     */
     //result = texture2D(tex, texPos1 * pixel);
 
-/*
+    #if 1
+      float weights = 0.0;
+
+      for(float i = -1.0; i <= 1.0; i += 1.0){
+        for(float j = -1.0; j <= 1.0; j += 1.0){
+          vec2 samplePos = vec2(i, j) * 0.2;
+          //float weight = gaussianBlurWeights(samplePos + 0.0001);
+          float weight = exp(-(pow2(samplePos.x * samplePos.x)) / (2.0 * 0.64))
+                       * exp(-(pow2(samplePos.y * samplePos.y)) / (2.0 * 0.64));
+
+          vec4 sampler = texture2D(tex, pixelPos + samplePos * pixel);
+
+          weights += weight;
+          result += sampler * weight;
+        }
+      }
+
+      result /= weights;
+    #else
     vec2 position = resolution * pixelPos;
     vec2 centerPosition = floor(position - 0.5) + 0.5;
 
@@ -277,10 +299,10 @@
     vec2 f3 = f * f2;
 
     float c = 50.0  * 0.01;
-    vec2 w0 = -c * f3 + 2.0 * c * f2 - c * f;
-    vec2 w1 = (2.0 - c) * f3 - (3.0 - c) * f2 + 1.0;
-    vec2 w2 = -(2.0 - c) * f3 + (3.0 - 2.0 * c) * f2 + c * f;
-    vec2 w3 = c * f3 - c * f2;
+    vec2 w0 =         -c  *  f3 + 2.0 * c          *  f2 - c  *  f;
+    vec2 w1 =  (2.0 - c)  *  f3 - (3.0 - c)        *  f2            + 1.0;
+    vec2 w2 = -(2.0 - c)  *  f3 + (3.0 - 2.0 * c)  *  f2 + c  *  f;
+    vec2 w3 =          c  *  f3 - c                *  f2;
     vec2 w12 = w1 + w2;
 
     vec2 tc12 = pixel * (centerPosition + w2 / w12);
@@ -293,8 +315,8 @@
                   vec4(centerColor, 1.0) * (w12.x * w12.y) +
                   vec4(texture2D(tex, vec2(tc3.x, tc12.y)).rgb, 1.0) * (w3.x * w12.y) +
                   vec4(texture2D(tex, vec2(tc12.x, tc3.y)).rgb, 1.0) * (w12.x * w3.y);
-         result /= result.a;
-*/
+    result /= result.a;
+    #endif
 
     result.rgb = encode(result.rgb);
 
@@ -340,10 +362,11 @@
     float inScreenPrev = step(0.0, previousCoord.x) * step(previousCoord.x, 1.0) * step(0.0, previousCoord.y) * step(previousCoord.y, 1.0);
 
     vec3 previousColor = ReprojectSampler(last_color, previousCoord).rgb;
+         //previousColor = encode(previousColor);
          previousColor = clipToAABB(previousColor, minColor, maxColor);
 
-    #define LowFreqWeight 0.85
-    #define HiFreqWeight  0.95
+    #define LowFreqWeight 0.8
+    #define HighFreqWeight  0.95
 
     vec3 weightA = vec3(0.05) * inScreenPrev;
     vec3 weightB = 1.0 - weightA;
@@ -364,14 +387,15 @@
     #endif
 
     #if TAA_Blend > 0 && TAA_Blend < 3
-    weightB = lerq(vec3(LowFreqWeight), vec3(HiFreqWeight), blend) * inScreenPrev;
-    weightA = 1.0 - weightB;
+    //weightB = lerq(vec3(LowFreqWeight), vec3(HighFreqWeight), maxComponent(blend)) * inScreenPrev;
+    //weightA = 1.0 - weightB;
     #endif
 
     vec3 antialiased = (currentColor * weightA + previousColor * weightB);
 
-    sharpen = clamp(currentColor - sharpen, vec3(-0.001), vec3(0.001));
-    antialiased += sharpen * inScreenPrev * TAA_Sharpen * 0.01 * lerq(vec3(0.7071), vec3(sqrt(2.0)), blend);
+    sharpen = clamp(currentColor - sharpen, vec3(-0.002), vec3(0.002));
+    sharpen *= lerq(vec3(0.7071), vec3(sqrt(2.0)), maxComponent(blend));
+    antialiased += sharpen * inScreenPrev * TAA_Sharpen * 0.01;
 
     return decode(antialiased);
   }

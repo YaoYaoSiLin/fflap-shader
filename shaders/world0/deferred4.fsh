@@ -5,11 +5,15 @@
 
 //#define Enabled_SSAO
 
+#define Global_Illumination
+
 #define Enabled_ScreenSpace_Shadow
 //#define Fast_Normal
 
 #define AtmosphericScattering_Steps 8
 #define AtmosphericScattering_Stepss 8
+
+#define GI_Rendering_Scale 0.353553
 
 const int noiseTextureResolution = 64;
 
@@ -285,7 +289,7 @@ float HGPF(in float phase, in float g){
 
   return 0.0795774 * ((1.0 - g2) / pow(1.0 + g2 - 2.0 * g * phase, 1.5));
 }
-
+#if 0
 float GetCloudsLighting(in float phase, in float density){
   float g = 0.8;
   float g2 = g*g;
@@ -454,7 +458,7 @@ void CalcCirrus(inout vec3 color, in vec3 wP, in vec3 P, in vec3 lP){
 
   //color = mix(color, sum.rgb, sum.a);
 }
-
+#endif
 #if 0
 float GetCirrus(in vec3 p){
   float t = frameTimeCounter * 0.004;
@@ -600,27 +604,6 @@ void (inout vec3 color, in vec3 wP, in vec3 P, in vec3 lP){
   clouds *= clamp01((direction.y - 0.07) * Pi * 2.0);
 }
 #endif
-vec3 shadowMapGI(){
-
-
-  return vec3(0.0);
-  /*
-  vec3 rsmBlur = vec3(0.0);
-
-  vec2 fragCoord = floor(texcoord * resolution);
-  float cb = step(mod(fragCoord.x * fragCoord.y, 2), 0.5);
-
-  for(float i = -1.0; i <= 1.0; i += 1.0){
-    for(float j = -1.0; j <= 1.0; j += 1.0){
-      rsmBlur += rgb2L(texture2D(gaux2, texcoord*0.5+vec2(i, j)*pixel*1.0).rgb);
-    }
-  }
-
-  rsmBlur *= 1.0/9.0;
-
-  return rgb2L(texture2D(gaux2, texcoord*0.17685185).rgb);
-  */
-}
 
 vec3 invKarisToneMapping(in vec3 color){
 	//https://graphicrants.blogspot.com/2013/12/tone-mapping.html
@@ -689,7 +672,7 @@ vec4 LowDetailSampler0p5x(in sampler2D sampler, in vec2 coord, int decode){
 vec3 UpSampleRSM(in vec2 coord, in vec3 normal1x, in float depth1x){
   vec3 tex = vec3(0.0);
 
-  coord *= 0.353553;
+  coord *= GI_Rendering_Scale;
   //coord = floor(coord * resolution) * pixel;
 
   depth1x = linearizeDepth(depth1x);
@@ -867,7 +850,8 @@ void main() {
     float ao = UpSampleAO(texcoord, normalSurface);
           ao = L2Gamma(ao).x;
 
-    #ifdef Enabled_SSAO
+    #ifndef Global_Illumination
+      ao = 1.0;
       //ao = CalculateAOBlur();
       //ao = pow(ao, 2.2);
     #endif
@@ -905,9 +889,6 @@ void main() {
     color = sunLighting * SunLight;
 
     //vec3 heldLighting = BRDF(albedoL, -nvP, -nvP, normalVisible, normalSurface, roughness, metallic, rgb2L(F0));
-
-    vec3 diffuse = vec3(0.0);
-
     vec3 m = normalize(reflectP - nvP);
 
     float vdoth = pow5(1.0 - clamp01(dot(-nvP, m)));
@@ -924,45 +905,23 @@ void main() {
     float FdV = 1.0 + (FD90 - 1.0) * vdoth;
     float FdL = 1.0 + (FD90 - 1.0) * pow5(clamp01(ndotl));
 
-    vec3 skyLighting = albedo.rgb * (skyLightingColorRaw) * max(0.0, ndotu * 0.5 + 0.5);
-
-    float indirectLightDown = clamp01(dot(normalize(reflect(nshadowLightPosition, centerupPosition)), normalSurface));
-    float indirectLightBack = clamp01(dot(normalize(reflect(nshadowLightPosition, -nshadowLightPosition)), normalSurface));
     float NdotL = dot(centerupPosition, normalSurface);
-    vec3 fakeGI = albedo.rgb * (skyLightingColorRaw * sunLightingColorRaw) * skyLightingMap * 2.0;//mix(skyLightingColorRaw * 2.0 * Pi, sunLightingColorRaw, clamp01(0.7 + NdotL))
-
     float ldotu = max(0.0, dot(nshadowLightPosition, centerupPosition));
-    fakeGI *= (indirectLightDown + indirectLightBack) * 0.5 * (pow2(ldotu));
-
-    diffuse = skyLighting * 0.54 * 1.2275;
-    diffuse += fakeGI;
-    diffuse *= ao * skyLightingMap;
-    //diffuse += albedo.rgb * torchLightingColor * heldLightingGIFading * ao;
-
-    //vec3 gi = texture2D(gaux2, texcoord*0.5).rgb;
-    //gi = rgb2L((gi));
-    //gi = gi * albedo.rgb * sunLightingColorRaw * SunLight;
-
-    //diffuse += gi * 0.168;
-
-    diffuse *= 0.7;
-
-    //diffuse = albedo.rgb * (skyLightingColorRaw);// * (sqrt(max(0.0, ndotu)) * pow2(skyLightingMap) + abs(ndotl) * 0.33 * step(-0.1, ndotu));
-    //diffuse *= skyLightingMap;
-    //diffuse *= ao;
 
     vec3 ambient = albedo.rgb * skyLightingColorRaw * (ao + ndotu + 1.0) * 0.333;
     //vec3 ambient = albedo.rgb * skyLightingColorRaw * (ao + ndotu * 0.5 + 0.5) / 1.5;
     vec3 bounce = albedo.rgb * skyLightingColorRaw * ao * clamp01(-ndotu) * pow2(ldotu) * skyLightingMap;
 
-    diffuse = (ambient) * skyLightingMap;
+    vec3 diffuse = ambient * skyLightingMap;
 
+    #ifdef Global_Illumination
     vec3 indirect = UpSampleRSM(texcoord, normalSurface, depth).rgb * (1.0 - metallic);
     //indirect = sqrt(indirect * getLum(indirect));
     indirect = L2Gamma(indirect * invPi);
 
     //indirect *= normalize(albedo.rgb) * sqrt(getLum(albedo.rgb));
-    diffuse += indirect * 4.0 * albedo.rgb * sunLightingColorRaw * SunLight * fading;
+    diffuse += indirect * 8.0 * albedo.rgb * sunLightingColorRaw * SunLight * fading;
+    #endif
 
     translucentShadowMaps = exp(-translucentShadowMaps * 0.33 / d);
 
@@ -1135,7 +1094,24 @@ void main() {
   //if(skyLightingMap < 0.001) color += vec3(1.0, 0.0, 0.0);
 
   color = L2rgb(color);
+  /*
+  vec2 fragCoord = floor(texcoord * resolution);
+  bool checkerBoard = bool(mod(fragCoord.x + fragCoord.y, 2));
 
+  vec2 c = texcoord;
+  //c = floor(c * resolution) * pixel * sqrt(2.0);
+
+  vec4 data = vec4(0.0);
+
+  c.x -= pixel.x;
+  if(checkerBoard) {
+    c.x += pixel.x;
+  }
+  data = texture2D(gaux2, c);
+
+  color = data.rgb;
+  */
+  //color = texture2D(gaux2, texcoord).rgb;
   //if(texcoord.x < 0.1 && isEyeInWater == 1){
   //  color = vec3(float(eyeBrightness.y) / 240.0);
   //}

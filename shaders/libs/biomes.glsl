@@ -46,8 +46,9 @@ vec4 CalculateWaterColor(in vec4 color){
   color.rgb = vec3(0.247 , 0.4627, 0.8941);
   #endif
 
-  color.a = (color.r + color.g) / (min(color.r, color.g) + 0.01) * (1.0 - color.b) * 0.5 / Pi;
+  //color.a = (color.r + color.g) / (min(color.r, color.g) + 0.01) * (1.0 - color.b) * 0.5 / Pi;
   //color.rgb = pow(color.rgb, vec3(2.2));
+  color.a = ((1.0 - color.b) + color.g) / maxComponent(color.rgb) * 0.1 + 0.15;
 
   return color;
 }

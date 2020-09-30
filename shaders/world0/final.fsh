@@ -21,6 +21,8 @@ uniform sampler2D gnormal;
 uniform sampler2D composite;
 uniform sampler2D gaux2;
 
+uniform sampler2D noisetex;
+
 #define colortex gaux2
 
 uniform float frameTimeCounter;
@@ -45,6 +47,14 @@ vec2 pixel      = 1.0 / vec2(viewWidth, viewHeight);
 #define bloomSampler gnormal
 
 #include "../libs/PostProcessing.glsl"
+
+vec4 opElongate( in vec3 p, in vec3 h )
+{
+    //return vec4( p-clamp(p,-h,h), 0.0 ); // faster, but produces zero in the interior elongated box
+
+    vec3 q = abs(p)-h;
+    return vec4( max(q,0.0), min(max(q.x,max(q.y,q.z)),0.0) );
+}
 
 vec2 uv = gl_TexCoord[0].st;
 /*
@@ -286,7 +296,7 @@ void main(){
 
 			colorIndex *= 0.125;
 
-			//color += (color - colorIndex) * 0.0025 * 500.0;
+			color += (color - colorIndex) * 0.025 * -1.0;
 			color = clamp01(color);
 		#endif
 
@@ -324,6 +334,10 @@ void main(){
 	#ifdef RawOut
 	color = texture2D(gaux2, texcoord).rgb;
 	#endif
+
+	//vec2 uv2 = texcoord * vec2(aspectRatio, 1.0) * resolution.y / 64.0;
+	//color = texture2D(noisetex, uv2).rgb;
+	//if(floor(uv2) != vec2(0.0)) color = vec3(1.0, 0.0, 0.0);
 
   gl_FragColor = vec4(color, 1.0);
 }

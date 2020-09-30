@@ -1,16 +1,23 @@
 #version 130
 
-#define GI_Rendering_Scale 0.5
+#define GI_Rendering_Scale 0.5 //[0.353553 0.5]
 
+#define gcolor colortex0
 #define composite colortex3
 #define gaux2 colortex5
 
+uniform sampler2D gcolor;
 uniform sampler2D composite;
 uniform sampler2D gaux2;
 
 uniform sampler2D depthtex0;
 
+uniform sampler2D depthtex2;
+
 uniform mat4 gbufferProjectionInverse;
+uniform mat4 gbufferProjection;
+uniform mat4 gbufferModelViewInverse;
+uniform mat4 gbufferModelView;
 
 uniform float viewWidth;
 uniform float viewHeight;
@@ -40,10 +47,6 @@ vec2 pixel = 1.0 / resolution;
 
 // RotationCosSin is (cos(alpha),sin(alpha)) where alpha is the rotation angle
 // A 2D rotation matrix is applied (see https://en.wikipedia.org/wiki/Rotation_matrix)
-vec2 RotateDirection(vec2 V, vec2 RotationCosSin) {
-    return vec2(V.x*RotationCosSin.x - V.y*RotationCosSin.y,
-                V.x*RotationCosSin.y + V.y*RotationCosSin.x);
-}
 
 float ComputeCoarseAO(in vec2 coord){
   //return 1.0;
@@ -60,7 +63,8 @@ float ComputeCoarseAO(in vec2 coord){
 
   float alpha = invsteps * 2.0 * Pi;
 
-  float dither = R2sq(coord * resolution * 0.5 - jittering) * 0.8 + 0.2;
+  //float dither = R2sq(coord * resolution * 0.5 - jittering) * 0.8 + 0.2;
+  float dither = GetBlueNoise(depthtex2, texcoord, resolution.y, jittering);
 
   float RadiusPixels = 4096.0 / vP.z;
   float StepSizePixels = (RadiusPixels / 4.0) / float(steps + 1);
@@ -95,6 +99,68 @@ float ComputeCoarseAO(in vec2 coord){
 
 }
 
+void SecondaryIndirect(inout vec4 tex){
+  tex.rgb = vec3(0.0);
+
+  float blueNoise = GetBlueNoise(depthtex2, texcoord, resolution.y, jittering);
+
+  vec2 coord = texcoord / GI_Rendering_Scale;
+  vec3 rayOrigin = nvec3(gbufferProjectionInverse * nvec4(vec3(coord, texture(depthtex0, coord).x) * 2.0 - 1.0));
+
+  vec3 normal = normalDecode(texture2D(composite, coord).xy);
+  vec3 worldNormal = mat3(gbufferModelViewInverse) * normal;
+
+  vec3 upVector = abs(worldNormal.z) < 0.4999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+  upVector = mat3(gbufferModelView) * upVector;
+
+  vec3 t = normalize(cross(upVector, normal));
+  vec3 b = cross(normal, t);
+  mat3 tbn = mat3(t, b, normal);
+
+  float CosTheta = sqrt((1 - blueNoise) / ( 1 + (0.7 - 1) * blueNoise));
+  float SinTheta = sqrt(1 - CosTheta * CosTheta);
+
+  float r = abs(blueNoise - 0.5) * 2.0 * 2.0 * Pi;
+  vec3 ramdomDirection = vec3(cos(r) * SinTheta, sin(r) * SinTheta, 1.0);
+       ramdomDirection = normalize(tbn * ramdomDirection);
+  vec3 rayDirection = normalize(reflect(normalize(rayOrigin), ramdomDirection));
+
+  int steps = 6;
+  float invsteps = 1.0 / float(steps);
+
+  float radius = 1.4;
+  rayDirection *= radius;
+
+  vec3 rayStart = rayOrigin + rayDirection;
+
+  for(int i = 0; i < steps; i++){
+    vec3 testPoint = rayStart - rayDirection * invsteps;
+
+    vec3 Coord = nvec3(gbufferProjection * nvec4(testPoint)) * 0.5 + 0.5;
+    if(clamp(Coord.xy, pixel * 2.0, 1.0 - pixel * 2.0) != Coord.xy) break;
+
+    float sampleDepth = texture(depthtex0, Coord.xy).x;
+    vec3 samplePosition = nvec3(gbufferProjectionInverse * nvec4(vec3(Coord.xy, texture(depthtex0, Coord.xy).x) * 2.0 - 1.0));
+    vec3 halfPosition = rayOrigin - samplePosition;
+
+    if(Coord.z < sampleDepth) continue;
+    //if(length(samplePosition - testPoint) < 1.0 - float(i) * invsteps) continue;
+
+    vec3 sampleColor = texture2D(gaux2, Coord.xy * GI_Rendering_Scale).rgb * texture2D(gcolor, Coord.xy).rgb;
+    vec3 sampleNormal = normalDecode(texture2D(composite, Coord.xy).xy);
+
+    vec3 lightingDirection = normalize(testPoint - rayOrigin);
+    float sampleNdotl = step(0.01, dot(lightingDirection, normal)) * step(0.01, dot(-lightingDirection, sampleNormal));
+    //float sampleNdotl = saturate(dot(lightingDirection, normal) * 1.0) * saturate(dot(-lightingDirection, sampleNormal) * 1.0);
+
+    float sampleFading = pow4(length(halfPosition));
+
+    tex.rgb += sampleColor * sampleNdotl / max(1.0, sampleFading);
+  }
+
+  tex.rgb += texture2D(gaux2, texcoord).rgb;
+}
+
 void main() {
   vec4 data = vec4(vec3(0.0), 1.0);
 
@@ -102,15 +168,20 @@ void main() {
 
   //if(texcoord.x < 0.5 + pixel.x && texcoord.y < 0.5 + pixel.y){
   //}
-  data = texture2D(gaux2, texcoord);
+  //data = texture2D(gaux2, texcoord);
+  if(floor(texcoord.xy * 2.0) == vec2(0.0)){
+    data = vec4(1.0);
+    data = texture2D(gaux2, texcoord);
+    //SecondaryIndirect(data);
+  }
 
   //vec2 halfCoord = texcoord * 2.0;
   //vec3 viewPosition = nvec3(gbufferProjectionInverse * nvec4(vec3(half, texture(depthtex0, half).x) * 2.0 - 1.0));
   //vec3 normal = normalDecode(texture2D(composite, halfCoord).xy);
 
   if(texcoord.x > 0.5){
-    if(texcoord.y > 0.5) data.x = (texture(depthtex0, (texcoord - vec2(0.5)) * 2.82843).x);
-    else data.xyz = normalDecode(texture2D(composite, (texcoord - vec2(0.5, 0.0)) * 2.82843).xy) * 0.5 + 0.5;
+    if(texcoord.y > 0.5) data.x = (texture(depthtex0, (texcoord - vec2(0.5)) / GI_Rendering_Scale).x);
+    else data.xyz = normalDecode(texture2D(composite, (texcoord - vec2(0.5, 0.0)) / GI_Rendering_Scale).xy) * 0.5 + 0.5;
   }else{
     if(texcoord.y > 0.5){
       data.x = ComputeCoarseAO((texcoord - vec2(0.0, 0.5)) * 2.0);

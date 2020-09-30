@@ -92,6 +92,10 @@ float pow3(in float x){
   return x * x * x;
 }
 
+float pow4(in float x){
+  return x * x * x * x;
+}
+
 float pow5(in float x){
   return x * x * x * x * x;
 }
@@ -104,11 +108,19 @@ float maxComponent( vec3 a ) {
     return max(a.x, max(a.y, a.z) );
 }
 
+float rescale(float vmin, float vmax, float v){
+  return saturate((v-vmin)/(vmax-vmin));
+}
+
+vec3 rescale(vec3 vmin, vec3 vmax, vec3 v){
+  return saturate((v-vmin)/(vmax-vmin));
+}
+
 #define CalculateMaskID(id, x) bool(step(id - 0.5, x) * step(x, id + 0.5))
 #define CalculateMaskIDVert(id, E) step(id - 0.5, E) * step(E, id + 0.5) * id
 #define CalculateMaskIDVert2(id, id2, E) step(id - 0.5, E) * step(E, id + 0.5) * id + step(id2 - 0.5, E) * step(E, id2 + 0.5) * id
 
-#ifdef Gaussian_Blur
+
   float gaussianBlurWeights(in float offset){
     float o = 0.83;
 
@@ -126,9 +138,14 @@ float maxComponent( vec3 a ) {
 
     return (1.0f/(2.0f*Pi*o))*exp(-((offset.x+offset.y)/(2.0f*o)));
   }
-#endif
+
 
 vec3 saturation(in vec3 color, in float s){
   float lum = dot03(color);
   return (lum + (color - lum) * s);
+}
+
+vec2 RotateDirection(vec2 V, vec2 RotationCosSin) {
+    return vec2(V.x*RotationCosSin.x - V.y*RotationCosSin.y,
+                V.x*RotationCosSin.y + V.y*RotationCosSin.x);
 }

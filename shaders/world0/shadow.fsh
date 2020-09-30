@@ -9,9 +9,14 @@ uniform sampler2D noisetex;
 
 uniform sampler2D depthtex0;
 uniform sampler2D depthtex1;
+uniform sampler2D shadowtex0;
+uniform sampler2D shadowtex1;
 
 uniform mat4 gbufferModelView;
 uniform mat4 gbufferModelViewInverse;
+uniform mat4 shadowModelView;
+uniform mat4 shadowProjection;
+uniform mat4 shadowProjectionInverse;
 
 uniform vec3 shadowLightPosition;
 
@@ -51,15 +56,38 @@ vec2 normalEncode(vec3 n) {
 void main() {
 	vec4 tex = texture2D(texture, texcoord) * color;
 
-  if(!gl_FrontFacing) discard;
+  //if(!gl_FrontFacing) discard;
+
+  float maxDistance = 1.414;
 
 	if(isWater > 0.5) {
-    tex.rgb = vec3(1.0);
-    tex.a = 0.05;
+  //  tex.rgb = vec3(1.0, 0.0, 0.0);
+  //  tex.a = 0.05;
+    tex = color;
+    //tex.a *= 0.01;
+    maxDistance = (255.0);
 	}
 
-  //tex.rgb *= 1.0 - isLava;
+  vec4 uv = shadowProjection * shadowModelView * vec4(vP, 1.0);
+       uv /= uv.w;
+       uv = uv * 0.5 + 0.5;
+       uv.xy = gl_FragCoord.xy;
 
+  float depth0 = texture2D(shadowtex0, uv.xy).x;
+  float depth1 = texture2D(shadowtex1, uv.xy).x;
+
+  vec4 p0 = shadowProjectionInverse * vec4(vec3(uv.xy, depth0) * 2.0 - 1.0, 1.0);
+  vec4 p1 = shadowProjectionInverse * vec4(vec3(uv.xy, depth1) * 2.0 - 1.0, 1.0);
+
+  float depth = length(p0.xyz - p1.xyz);
+
+  vec3 scatteringcoe = vec3(1.0);
+       scatteringcoe = scatteringcoe * Pi * (tex.a * tex.a);
+
+  //tex.rgb *= step(depth0, depth1);//exp(-depth * scatteringcoe);
+
+  //tex.rgb *= 1.0 - isLava;
+  /*
   vec3 worldLightPosition = mat3(gbufferModelViewInverse) * normalize(shadowLightPosition);
   float ndotl = max(0.0, dot(worldLightPosition, worldNormal));
   tex.rgb *= min((ndotl * ndotl * 32.0), 1.0);
@@ -69,6 +97,7 @@ void main() {
 
   //scatteringFactor = min(exp(-scatteringFactor), 1.0);
   absorption = exp(-tex.a * Pi * blockDepth * (1.0 - tex.rgb));
+  */
 
   //tex.rgb = absorption;
   //tex.rgb *= scatteringFactor;
@@ -104,11 +133,12 @@ void main() {
   //tex.rgb = mix(tex.rgb, vec3(0.0), tex.a);
 
   vec3 normal = worldNormal;
+  if(gl_FragCoord.z > 0.9999) normal = vec3(0.0);
        //normal = mat3()
        //normal = mat3()
        //normal -= normal * 0.05;
 
 /* DRAWBUFFERS:01 */
-	gl_FragData[0] = vec4(worldNormal * 0.5 + 0.5, tex.a);
-	gl_FragData[1] = vec4(tex.rgb, tex.a);
+	gl_FragData[0] = vec4(normal * 0.5 + 0.5, tex.a);
+	gl_FragData[1] = vec4(tex.rgb, maxDistance / 255.0);
 }

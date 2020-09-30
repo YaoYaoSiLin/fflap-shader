@@ -1,68 +1,55 @@
 #version 130
 
-#define SSR_Rendering_Scale 0.5
+#define GI_Rendering_Scale 0.5 //[0.353553 0.5]
 
-uniform sampler2D gcolor;
-uniform sampler2D gdepth;
+#define SHADOW_MAP_BIAS 0.9
+
+const int   shadowMapResolution     = 2048;   //[512 768 1024 1536 2048 3072 4096]
+const float shadowDistance		  		= 140.0;
+const bool  generateShadowMipmap    = false;
+const bool  shadowHardwareFiltering = false;
+
+#define gnormal colortex2
+#define composite colortex3
+#define gaux2 colortex5
+
 uniform sampler2D gnormal;
 uniform sampler2D composite;
-uniform sampler2D gaux1;
 uniform sampler2D gaux2;
-uniform sampler2D gaux3;
 
 uniform sampler2D depthtex0;
 
+uniform sampler2D depthtex2;
+
+uniform sampler2D shadowtex0;
+uniform sampler2D shadowcolor0;
+uniform sampler2D shadowcolor1;
+
 uniform mat4 gbufferProjectionInverse;
-uniform mat4 gbufferProjection;
 uniform mat4 gbufferModelViewInverse;
 uniform mat4 gbufferModelView;
-uniform mat4 gbufferPreviousModelView;
-uniform mat4 gbufferPreviousProjection;
+uniform mat4 shadowModelView;
+uniform mat4 shadowModelViewInverse;
+uniform mat4 shadowProjection;
+uniform mat4 shadowProjectionInverse;
 
-uniform vec3 cameraPosition;
-uniform vec3 previousCameraPosition;
+uniform vec3 shadowLightPosition;
 
 uniform float viewWidth;
 uniform float viewHeight;
 uniform float aspectRatio;
 
 uniform int frameCounter;
-uniform int isEyeInWater;
 
 in vec2 texcoord;
 
-in vec4 eyesWaterColor;
-
-const bool gaux3Clear = false;
-
-vec2 resolution = vec2(viewWidth, viewHeight);
-vec2 pixel      = 1.0 / vec2(viewWidth, viewHeight);
-
-#define Gaussian_Blur
-
 #include "../libs/common.inc"
-#include "../libs/dither.glsl"
 #include "../libs/jittering.glsl"
+#include "../libs/dither.glsl"
 
-vec3 KarisToneMapping(in vec3 color){
-	float a = 0.00002;
-	float b = float(0xfff) / 65535.0;
-
-	float luma = maxComponent(color);
-
-	if(luma > a) color = color/luma*((a*a-b*luma)/(2.0*a-b-luma));
-	return color;
-}
-
-vec3 invKarisToneMapping(in vec3 color){
-	float a = 0.002;
-	float b = float(0x2fff) / 65535.0;
-
-	float luma = maxComponent(color);
-
-	if(luma > a) color = color/luma*((a*a-(2.0*a-b)*luma)/(b-luma));
-	return color;
-}
+float shadowPixel = 1.0 / float(shadowMapResolution);
+vec2 resolution = vec2(viewWidth, viewHeight);
+vec2 pixel = 1.0 / resolution;
 
 vec3 normalDecode(vec2 enc) {
     vec4 nn = vec4(2.0 * enc - 1.0, 1.0, -1.0);
@@ -72,340 +59,284 @@ vec3 normalDecode(vec2 enc) {
     return nn.xyz * 2.0 + vec3(0.0, 0.0, -1.0);
 }
 
-vec3 F(vec3 F0, float cosTheta){
- return F0 + (1.0 - F0) * cosTheta;
+vec3 wP2sP(in vec4 wP, out float bias){
+	vec4 sP = shadowModelView * wP;
+       sP = shadowProjection * sP;
+       sP /= sP.w;
+
+  bias = 1.0 / (mix(1.0, length(sP.xy), SHADOW_MAP_BIAS) / 0.95);
+
+  //sP.xy *= bias;
+  sP.z /= max(far / shadowDistance, 1.0);
+  sP = sP * 0.5 + 0.5;
+
+	return sP.xyz;
 }
 
-float DistributionTerm( float roughness, float ndoth )
-{
-	float d	 = ( ndoth * roughness - ndoth ) * ndoth + 1.0;
-	return roughness / ( d * d * Pi );
+vec3 GetClosest(in vec2 coord){
+  vec3 closest = vec3(0.0, 0.0, 1.0);
+
+  //coord.xy = jittering * pixel;
+  float depth = texture(depthtex0, coord).x;
+
+  //if(depth > 0.9999) closest.xyz = vec3(-1.0, depth);
+
+
+  for(int i = 0; i < 3; i++){
+    for(int j = 0; j < 3; j++){
+      vec2 neighborhood = (vec2(i, j)) * pixel * GI_Rendering_Scale;
+      float neighbor = texture(depthtex0, coord + neighborhood).x;
+
+      if(neighbor < closest.z){
+        closest.z = neighbor;
+        closest.xy = neighborhood;
+      }
+    }
+  }
+
+  closest.xy += coord;
+
+  return closest;
 }
 
-float VisibilityTerm( float roughness, float ndotv, float ndotl )
-{
-	float gv = ndotl * sqrt( ndotv * ( ndotv - ndotv * roughness ) + roughness );
-	float gl = ndotv * sqrt( ndotl * ( ndotl - ndotl * roughness ) + roughness );
-	return min(1.0, 0.5 / max( gv + gl, 0.00001 ));
+float linearizeShadowMapDepth(float depth) {
+    return (2.0 * near) / (shadowDistance + near - depth * (shadowDistance - near));
 }
 
-void CalculateBRDF(out vec3 f, out float g, out float d, in float roughness, in float metallic, in vec3 F0, in vec3 normal, in vec3 view, in vec3 L){
-	vec3 h = normalize(L + view);
+float invFar = 1.0 / far;
+#define MaxRange 8.0
 
-	float ndoth = clamp01(dot(normal, h));
-	float vdoth = pow5(1.0 - clamp01(dot(view, h)));
-	float ndotl = clamp01(dot(L, normal));
-	float ndotv = 1.0 - clamp01(dot(view, normal));
+vec4 Gather(in sampler2D tex, in vec2 coord){
+  vec4 sampler;
 
-	f = F(F0, vdoth);
-	d = DistributionTerm(roughness, ndoth);
-	g = VisibilityTerm(d, ndotv, ndotl);
-	//g /= 4.0 * max(0.0, dot(normal, L)) * max(0.0, dot(normal, view));
+  sampler += texture2D(gaux2, coord + vec2(pixel.x, 0.0));
+  sampler += texture2D(gaux2, coord - vec2(pixel.x, 0.0));
+  sampler += texture2D(gaux2, coord + vec2(0.0, pixel.y));
+  sampler += texture2D(gaux2, coord - vec2(0.0, pixel.y));
+  sampler *= 0.25;
+
+  return sampler;
 }
 
-vec2 GetMotionVector(in vec3 coord){
-  vec4 view = gbufferProjectionInverse * nvec4(coord * 2.0 - 1.0);
-       view /= view.w;
-       view = gbufferModelViewInverse * view;
-       view.xyz += cameraPosition - previousCameraPosition;
-       view = gbufferPreviousModelView * view;
-       view = gbufferPreviousProjection * view;
-       view /= view.w;
-       view.xy = view.xy * 0.5 + 0.5;
+float Gather1(in sampler2D tex, in vec2 coord){
+  float sampler;
 
-  vec2 velocity = coord.xy - view.xy;
+  sampler += texture(gaux2, coord + vec2(pixel.x, 0.0)).x;
+  sampler += texture(gaux2, coord - vec2(pixel.x, 0.0)).x;
+  sampler += texture(gaux2, coord + vec2(0.0, pixel.y)).x;
+  sampler += texture(gaux2, coord - vec2(0.0, pixel.y)).x;
+  sampler *= 0.25;
 
-  if(texture(depthtex0, texcoord).x < 0.7) velocity *= 0.001;
-
-  return velocity;
+  return sampler;
 }
 
-// https://software.intel.com/en-us/node/503873
-vec3 RGB_YCoCg(vec3 c)
-{
-  // Y = R/4 + G/2 + B/4
-  // Co = R/2 - B/2
-  // Cg = -R/4 + G/2 - B/4
-  //return c;
-  //if(texcoord.x > 0.5) return c;
-  return vec3(
-     c.x/4.0 + c.y/2.0 + c.z/4.0,
-     c.x/2.0 - c.z/2.0,
-    -c.x/4.0 + c.y/2.0 - c.z/4.0
-  );
+//vec2 fragCoord = floor(texcoord * resolution * GI_Rendering_Scale);
+//float checkerBoard = (mod(fragCoord.x + fragCoord.y, 2));
+/*
+vec3 GetShadowNormal(in vec2 coord, in float checkerBoard){
+  coord.x += pixel.x * checkerBoard;
+  return (texture2D(gaux2, coord).xyz * 2.0 - 1.0);
 }
 
-vec3 YCoCg_RGB(vec3 c)
-{
-  // R = Y + Co - Cg
-  // G = Y + Cg
-  // B = Y - Co - Cg
-  //return c;
-  //if(texcoord.x > 0.5) return c;
-  return saturate(vec3(
-    c.x + c.y - c.z,
-    c.x + c.z,
-    c.x - c.y - c.z
-  ));
+float GetShadowDepth(in vec2 coord, in float checkerBoard){
+  coord.x += pixel.x * checkerBoard;
+  return texture2D(gaux2, coord).a;
 }
 
-vec3 clipToAABB(vec3 color, vec3 minimum, vec3 maximum) {
-    // note: only clips towards aabb center (but fast!)
-    vec3 center  = 0.5 * (maximum + minimum);
-    vec3 extents = 0.5 * (maximum - minimum);
+vec3 GetShadowAlbedo(in vec2 coord, in float checkerBoard){
+  coord.x += pixel.x * (1.0 - checkerBoard);
 
-    // This is actually `distance`, however the keyword is reserved
-    vec3 offset = color - center;
+  vec3 albedo = texture2D(gaux2, coord).rgb;
+  albedo = normalize(albedo) * sqrt(getLum(albedo));
 
-    vec3 ts = abs(extents / (offset + 0.0001));
-    float t = clamp(minComponent(ts), 0.0, 1.0);
-    return center + offset * t;
+  return albedo;
+}
+*/
+
+vec3 GetShadowNormal(in vec2 coord){
+  return (texture2D(gaux2, coord + vec2(0.5, 0.0)).xyz * 2.0 - 1.0);
 }
 
-vec4 ReprojectSampler(in sampler2D tex, in vec2 pixelPos){
-  vec4 result = vec4(0.0);
-  float weights = 0.0;
+float GetShadowDepth(in vec2 coord){
+  return texture(gaux2, coord + vec2(0.0, 0.5)).x;
+}
+
+vec3 GetShadowAlbedo(in vec2 coord){
+  vec3 albedo = texture2D(gaux2, coord).rgb;
+       //albedo = normalize(albedo) * (getLum(albedo));
+
+  return albedo;
+}
+
+#define LowResolutionShadowMap
+
+void CalculateRSM(inout vec3 shadowMapColor, in vec3 shadowPosition, in vec2 offset, in vec3 shadowSpaceNormal, in vec3 shadowSpaceLightDirection, inout float totalWeight, in float maxRadius){
+  //vec3 testPosition = shadowPosition;// + vec3(offset * radius, 0.0);
+  //vec2 coord = floor(testPosition.xy * resolution) * pixel - pixel * 0.5;
+  //vec2 coord = shadowPosition.xy;//round(testPosition.xy * resolution * 0.5) * pixel;
+
+  #ifdef LowResolutionShadowMap
+  vec2 coord = round(shadowPosition.xy * resolution * 0.5) * pixel;
+  #else
+  vec2 coord = shadowPosition.xy * float(shadowMapResolution);
+  #endif
+
+  //vec3 albedo = GetShadowAlbedo(coord);
+  //vec3 normal = GetShadowNormal(coord);
+  //float depth = GetShadowDepth(coord);
+  //vec3 albedo = GetShadowAlbedo(coord, checkerBoard);
+  //vec3 normal = GetShadowNormal(coord, checkerBoard);
+  //float depth = GetShadowDepth(coord, checkerBoard);
+
+  #ifdef LowResolutionShadowMap
+    vec3 albedo = GetShadowAlbedo(coord);
+    vec3 normal = GetShadowNormal(coord);
+    float depth = GetShadowDepth(coord);
+  #else
+    vec3 albedo = (texelFetch(shadowcolor1, ivec2(coord), 0).rgb);
+
+    float alpha = texelFetch(shadowcolor1, ivec2(coord), 0).a;
+    if(bool(step(0.999, alpha))) albedo.rgb = vec3(0.0);
+
+    vec3 normal = mat3(shadowModelView) * (texelFetch(shadowcolor0, ivec2(coord), 0).rgb * 2.0 - 1.0);
+    float depth = texelFetch(shadowtex0, ivec2(coord), 0).x;
+  #endif
+
+  //albedo.rgb = normalize(albedo.rgb);
+  albedo.rgb = L2Gamma(albedo.rgb);
+
+  vec3 position = vec3(shadowPosition.xy + offset, depth) - shadowPosition.xyz;
+  //if(position.z <= 0.0) position.z *= 4.0;
+       position = mat3(shadowProjectionInverse) * position;
+
+  float l = length(position.xyz);
+        l = l*l*l*l+1e-5;
+
+  vec3 direction = normalize(position);
+
+  #if 1
+  float ndotl = clamp01(dot(shadowSpaceNormal, direction) * 4.0);
+        ndotl *= clamp01(dot(normal, -direction) * 4.0);
+  #else
+  float ndotl = step(0.01, dot(shadowSpaceNormal, direction));
+        ndotl *= step(0.01, dot(normal, -direction));
+  #endif
+  //ndotl = pow5(ndotl);
+
+  float irrdiance = max(0.0, dot(normal, shadowSpaceLightDirection));
+
+  float weight = ndotl;
+
+  shadowMapColor += albedo * weight * min(1.0, 1.0 / l * 128.0 * 2.0);
+  totalWeight += 1.0;
+}
+
+vec3 CalculateCoarseRSM(in vec3 viewPosition, in vec3 normal){
+  vec3 shadowMapColor = vec3(0.0);
+  float viewLength = length(viewPosition);
+
+  //if(viewLength > shadowDistance) return vec3(0.0);
+
+  vec3 worldLightVector = mat3(gbufferModelViewInverse) * normalize(shadowLightPosition);
+  vec3 shadowSpaceLight = mat3(shadowModelView) * worldLightVector;
+
+  float totalWeight = 0.0;
+
+  vec4 shadowPosition = (gbufferModelViewInverse) * nvec4(viewPosition);
+  vec3 shadowSpaceNormal = mat3(gbufferModelViewInverse) * (normal);
+       //shadowSpaceNormal.z *= 1.0 / 2048.0;
+       shadowSpaceNormal = mat3(shadowModelView) * shadowSpaceNormal;
+
+  shadowPosition = shadowModelView * shadowPosition;
+  shadowPosition = shadowProjection * shadowPosition;
+  shadowPosition /= shadowPosition.w;
+
+  //float distortion = mix(1.0, length(shadowPosition.xy), SHADOW_MAP_BIAS) / 0.95;
+  //shadowPosition.xy /= distortion;
+
+  shadowPosition.xyz = shadowPosition.xyz * 0.5 + 0.5;
+  shadowPosition.z -= shadowPixel;
+
+  vec2 fragCoord = floor(shadowPosition.xy * resolution);
+  float checkerBoard = mod(fragCoord.x + fragCoord.y, 2);
+
+  //shadowPosition.xy = floor(shadowPosition.xy * resolution) * pixel - pixel * 0.5;
+  //shadowMapColor = GetShadowNormal(shadowPosition.xy, checkerBoard);
+
+
+  //float dither = R2sq(texcoord.xx * resolution * 0.5);
+  float dither = R2sq(texcoord * resolution * GI_Rendering_Scale);
+  float blueNoise = GetBlueNoise(depthtex2, texcoord * GI_Rendering_Scale, resolution.y, jittering * 1.0);
+  float blueNoise2 = GetBlueNoise(depthtex2, (1.0 - texcoord) * GI_Rendering_Scale, resolution.y, jittering * 1.0);
+  //dither = blueNoise;
+
+  vec2 rotateAngle = vec2(dither, 1.0 - dither) * 0.9 + 0.1;
+
+  float maxRadius = 128.0;
+  float radius = (1.0 / 2048.0) * maxRadius;
+
+  float roughness = 0.99;
+  roughness *= roughness;
+
+  vec2 E = vec2(blueNoise2, blueNoise);
+       E.y = mix(E.y, 0.0, 0.7);
+       //E.x = mix(E.x, 1.0, 0.7);
+
+  float CosTheta = sqrt((1 - E.y) / ( 1 + (roughness - 1) * E.y));
+	float SinTheta = sqrt(1 - CosTheta * CosTheta);
 
   int steps = 8;
   float invsteps = 1.0 / float(steps);
 
   for(int i = 0; i < steps; i++){
-    float r = float(i) * invsteps * 2.0 * Pi;
-    vec2 samplePos = vec2(cos(r), sin(r));
-    float weight = gaussianBlurWeights(samplePos + 0.0001);
-    samplePos = samplePos * pixel + pixelPos;
+    float angle = (float(i) + E.x) * invsteps * 2.0 * Pi;
+    vec2 offset = vec2(cos(angle), sin(angle)) * SinTheta;
+         //offset = RotateDirection(offset, vec2(blueNoise, 1.0 - blueNoise));
 
-    vec4 sampler = texture2D(tex, samplePos);
-    result += sampler * weight;
-    weights += weight;
+    //if(i != 7) continue;
+
+    offset *= radius;
+
+    float distortion = mix(1.0, length(shadowPosition.xy * 2.0 - 1.0 + offset), SHADOW_MAP_BIAS) / 0.95;
+
+    #ifdef LowResolutionShadowMap
+    vec3 shadowCoord = shadowPosition.xyz + vec3(offset, 0.0);
+    #else
+    vec3 shadowCoord = shadowPosition.xyz * 2.0 - 1.0 + vec3(offset, 0.0);
+         shadowCoord = (shadowCoord / vec3(vec2(distortion), 1.0)) * 0.5 + 0.5;
+    #endif
+
+    CalculateRSM(shadowMapColor, shadowCoord, offset, shadowSpaceNormal, shadowSpaceLight, totalWeight, maxRadius);
+    //shadowMapColor += texture2D(shadowcolor1, shadowCoord.xy).rgb;
+    //totalWeight += 1.0;
   }
 
-  result /= weights;
-  //result.rgb = RGB_YCoCg(result.rgb);
+  //shadowMapColor *= invsteps;
+  shadowMapColor /= max(1.0, totalWeight);
+  shadowMapColor = G2Linear(shadowMapColor);
 
-  return result;
-}
-
-vec3 GetClosestRayDepth(in vec2 coord){
-  vec3 closest = vec3(0.0, 0.0, 1.0);
-
-  for(float i = -1.0; i <= 1.0; i += 1.0){
-    for(float j = -1.0; j <= 1.0; j += 1.0){
-      vec2 neighborhood = vec2(i, j) * pixel * SSR_Rendering_Scale;
-      //float neighbor = texture(depthtex0, texcoord).x;
-      float neighbor = texture2D(gaux1, coord * SSR_Rendering_Scale + neighborhood).a;
-
-      if(neighbor < closest.z){
-        closest.z = neighbor;
-        closest.xy = neighborhood;
-      }
-    }
-  }
-
-  closest.xy += coord;
-
-  return closest;
-}
-
-vec3 GetClosest(in vec2 coord, in float scale){
-  vec3 closest = vec3(0.0, 0.0, 1.0);
-
-	coord *= scale;
-
-  for(float i = -1.0; i <= 1.0; i += 1.0){
-    for(float j = -1.0; j <= 1.0; j += 1.0){
-      vec2 neighborhood = vec2(i, j) * pixel * scale;
-      //float neighbor = texture(depthtex0, texcoord).x;
-      float neighbor = texture2D(gaux1, coord + neighborhood).a;
-
-      if(neighbor < closest.z){
-        closest.z = neighbor;
-        closest.xy = neighborhood;
-      }
-    }
-  }
-
-  closest.xy += coord;
-
-  return closest;
-}
-
-vec3 CalculateReflection(in sampler2D sampler, in vec3 currentColor, in vec2 coord){
-  vec2 coord_jittering = coord + jittering * pixel;
-
-  vec3 minColor = vec3(1.0);
-  vec3 maxColor = vec3(-1.0);
-
-  for(float i = -1.0; i <= 1.0; i += 1.0){
-    for(float j = -1.0; j <= 1.0; j += 1.0){
-      vec2 offset = vec2(i, j) * pixel;
-      vec3 color = RGB_YCoCg(texture2D(sampler, coord_jittering + offset).rgb);
-
-      minColor = min(minColor, color);
-      maxColor = max(maxColor, color);
-    }
-  }
-
-  vec3 closest = GetClosestRayDepth(texcoord);
-  //     closest.xy = texcoord.xy + vec2(0.01);
-  //float border = float(floor(closest.xy) == vec2(0.0));
-
-  vec2 velocity = GetMotionVector(closest);
-	vec2 previousCoord = texcoord.xy - velocity;
-
-	float weight = 0.99;
-        //weight -= motionScale * 0.074999;
-				//weight *= float(floor(previousCoord) == vec2(0.0));
-
-  //vec3 currentColor = RGB_YCoCg(texture2D(sampler, coord_jittering).rgb);
-	currentColor = RGB_YCoCg(currentColor);
-  vec3 previousColor = RGB_YCoCg(ReprojectSampler(gaux3, previousCoord).rgb);
-
-	//minColor = mix(minColor, previousColor, 0.9);
-	//maxColor = mix(maxColor, previousColor, 0.9);
-
-	//minColor = min(minColor, mix(previousColor, currentColor, 0.5));
-	//maxColor = max(maxColor, mix(previousColor, currentColor, 0.5));
-
-  previousColor = clipToAABB(previousColor, minColor, maxColor);
-
-  vec3 weightA = vec3(0.015);
-  vec3 weightB = vec3(1.0 - weightA);
-
-  //vec3 blend = clamp01(abs(maxColor - minColor) / currentColor);
-  //weightB = lerq(vec3(0.9), vec3(0.985), blend);
-  //weightA = 1.0 - weightB;
-
-  //weightB = mix(vec3(0.97), vec3(0.999), clamp01((maxColor - minColor) / currentColor));
-  //weightA = 1.0 - weightB;
-
-  //reflection = (0.001 * currentColor + 0.999 * previousColor);
-	vec3 reflection = vec3(0.0);
-  reflection = (currentColor * weightA + previousColor * weightB);
-  reflection = YCoCg_RGB(reflection);
-
-	return reflection;
-  //reflection = texture2D(gaux1, texcoord * 0.5).rgb;
-
-  //reflection = clipToAABB(previousColor, minColor, maxColor);
-  //reflection = mix(reflection, previousColor, weight);
-  //reflection = YCoCg_RGB(reflection);
-  //reflection += (reflection - previousColor) * 0.0025;
-}
-
-vec3 SpecularReflectionResolve(in vec2 coord){
-	int steps = 4;
-	float invsteps = 1.0 / float(steps);
-
-	vec3 color;
-	float totalWeight;
-
-	float dither = R2sq(texcoord * resolution);
-
-	for(int i = 0; i < steps; i++){
-		float r = (1.0 + float(i)) * invsteps * 2.0 * Pi;
-		vec2 samplePosition = vec2(cos(r), sin(r));
-	//for(int i = -1; i <= 2; i++){
-	//	for(int j = -1; j <= 2; j++){
-	//		vec2 samplePosition = vec2(i, j);
-				 samplePosition = samplePosition * pixel * SSR_Rendering_Scale + coord;
-
-		vec3 sampleColor = texture2D(gaux1, samplePosition).rgb;
-
-		float weight = texture(composite, samplePosition).x;
-
-		color += sampleColor * weight;
-		totalWeight += weight;
-//	}
-	}
-
-	color /= totalWeight;
-
-	return color;
-}
-
-vec4 SpecularReflectionResolve(in sampler2D sampler, in vec2 coord){
-	int steps = 4;
-	float invsteps = 1.0 / float(steps);
-
-	vec4 color;
-	float totalWeight;
-
-	float dither = R2sq(texcoord * resolution);
-
-	for(int i = 0; i < steps; i++){
-		float r = (1.0 + float(i)) * invsteps * 2.0 * Pi;
-		vec2 samplePosition = vec2(cos(r), sin(r));
-	//for(int i = -1; i <= 2; i++){
-	//	for(int j = -1; j <= 2; j++){
-	//		vec2 samplePosition = vec2(i, j);
-				 samplePosition = samplePosition * pixel * SSR_Rendering_Scale + coord;
-
-		vec4 sampleColor = texture2D(sampler, samplePosition);
-
-		float weight = texture(composite, samplePosition).x;
-
-		color += sampleColor * weight;
-		totalWeight += weight;
-	//	}
-	}
-
-	color /= totalWeight;
-	//color *= invsteps;
-
-	return color;
+  return shadowMapColor;
 }
 
 void main() {
-	vec2 coord = texcoord;
-			 coord = GetClosest(coord, SSR_Rendering_Scale).st;
-	vec2 unjitterUV = texcoord + jittering * pixel;
+  vec3 color = vec3(0.0);
 
-	vec3 albedo = texture2D(gcolor, texcoord).rgb;
+  vec3 normal = normalDecode(texture2D(composite, texcoord).xy);
+  vec3 worldNormal = mat3(gbufferModelViewInverse) * normal;
 
-  vec3 normalSurface = normalDecode(texture2D(composite, texcoord).xy);
-  vec3 normalVisible = normalDecode(texture2D(gnormal, texcoord).xy);
+  vec2 coord = texcoord;
+  coord -= jittering * pixel;
 
-	float smoothness = texture2D(gnormal, texcoord).r;
-	float metallic   = texture2D(gnormal, texcoord).g;
-	float roughness  = 1.0 - smoothness;
-				roughness  = roughness * roughness;
+  vec4 vP = gbufferProjectionInverse * nvec4(vec3(coord, texture(depthtex0, coord).x) * 2.0 - 1.0);vP/=vP.w;
+  vec4 wP = gbufferModelViewInverse * vP;
 
-	vec3 F0 = vec3(max(0.02, metallic));
-			 F0 = mix(F0, albedo.rgb, step(0.5, metallic));
-
-	float depth = texture2D(depthtex0, texcoord).x;
-	vec3 vP = vec3(texcoord, depth) * 2.0 - 1.0;
-			 vP = nvec3(gbufferProjectionInverse * nvec4(vP));
-	vec3 nvP = normalize(vP);
+  vec3 worldLightVector = mat3(gbufferModelViewInverse) * normalize(shadowLightPosition);
+  float viewndotl = dot(worldNormal, worldLightVector);
 
   float viewLength = length(vP.xyz);
 
-  vec3 normal = normalDecode(texture2D(gnormal, texcoord).zw);
+  color = CalculateCoarseRSM(vP.xyz, normal);
 
-	vec3 nreflectVector = normalize(reflect(nvP, normal));
-	vec3 rayOrigin = SpecularReflectionResolve(composite, texcoord * 0.5).gba * 2.0 - 1.0;
-
-	vec3 color = texture2D(gaux2, texcoord).rgb;
-
-	float g = 0.0;
-	float d = 0.0;
-	vec3 f = vec3(0.0);
-	CalculateBRDF(f, g, d, roughness, metallic, F0, normal, -nvP, nreflectVector);
-	float brdf = max(0.0, g * d);
-	//f = F(F0, pow5(1.0 - max(0.0, dot(normalize(nreflectVector-nvP), -nvP))));
-
-	vec3 reflection = texture2D(gaux1, coord).rgb;
-			 //reflection = SpecularReflectionResolve(coord);
-			 reflection = CalculateReflection(gaux1, reflection, coord);
-
-  vec3 antialiased = reflection;
-	reflection *= f;
-
-  //reflection = KarisToneMapping(reflection);
-	color += reflection / overRange * step(texture(gdepth, texcoord).z, 0.999);
-
-/* DRAWBUFFERS:56 */
+  /* DRAWBUFFERS:3 */
   gl_FragData[0] = vec4(color, 1.0);
-  gl_FragData[1] = vec4(antialiased, 1.0);
 }

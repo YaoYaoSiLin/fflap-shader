@@ -121,13 +121,52 @@ void main(){
     vec3 nupPosition = normalize(upPosition);
 
     vec3 worldSkyPosition = mat3(gbufferModelViewInverse) * normalize(vP.xyz);
-    fading = clamp01((worldLightPosition.y - 0.1) * 6.6667);
-    sunLightingColorRaw = CalculateSky(nlightPosition, sP, 63.0, 1.0);
-    skyLightingColorRaw = CalculateSky(nupPosition, sP, 63.0, 1.0);
+    vec3 worldSkyHalfPosition = normalize(vec3(0.0, 1.0, 0.0) + sP);
+
+    vec2 tL = RaySphereIntersection(vec3(0.0, rA + 1.0, 0.0), sP, vec3(0.0), rA);
+    //if(tL.y > tL.x) tL = tL.yx;
+    //tL.x = max(0.0, tL.x);
+    vec2 tE = RaySphereIntersection(vec3(0.0, rE + 1.0, 0.0), vec3(0.0, -1.0, 0.0), vec3(0.0), rE);
+
+    //fading = saturate((max(0.0, -tL.x) - max(0.0, tE.x) - 19999.0) * 1e-5);
+    //sunLightingColorRaw = CalculateSky(nlightPosition, sP, 63.0, 1.0);
+    //skyLightingColorRaw = CalculateSky(nupPosition, sP, 63.0, 1.0);
+    //sunLightingColorRaw = CalculateInScattering(vec3(0.0, 0.0, 0.0), sP, sP, -0.95, ivec2(16, 1));
+    //skyLightingColorRaw = CalculateInScattering(vec3(0.0, 0.0, 0.0), worldSkyHalfPosition, sP, -0.76, ivec2(16, 1));
+
+    //worldSkyHalfPosition = mat3(gbufferModelViewInverse) * worldSkyHalfPosition;
+    //nlightPosition = mat3(gbufferModelViewInverse) * nlightPosition;
+
+    //sunLightingColorRaw = InScattering(vec3(0.0), sP, sP, 0.999, 0.6);
+    //skyLightingColorRaw = InScattering(vec3(0.0), vec3(0.0, 1.0, 0.0), sP, dot(sP, worldSkyHalfPosition), 0.76);
+
+    vec3 samplerPosition = vec3(0.0, 0.0, 0.0);
+
+    vec3 sunLightingExtinction = Extinction(samplerPosition, sP);
+    vec3 skyLihgtingExtinction = Extinction(samplerPosition, vec3(0.0, 1.0, 0.0));
+
+    //fading = maxComponent(sunLightingExtinction);
+    //fading = saturate((max(0.0, -(tL.y - tL.x)) - max(0.0, tE.x)) * 0.0001);
+    fading = saturate((abs(sP.y) - 0.05) * 20.0);
+
+    //sunLightingColorRaw = CalculateInScattering(samplerPosition, sP, sP, 0.996, ivec2(5, 2), vec3(0.0, 1.0, 1.0));
+    sunLightingColorRaw = invPi * sunLightingExtinction;
+    skyLightingColorRaw = CalculateInScattering(samplerPosition, normalize(vec3(0.0, 1.0, 0.0) - sP), sP, 0.5, ivec2(5, 2), vec3(1.0, 1.0, 0.0));
+    //skyLightingColorRaw *= (skyLihgtingExtinction);
+    //skyLightingColorRaw /= maxComponent(skyLihgtingExtinction);
+
+    vec3 moonLighting = Extinction(samplerPosition, -sP) * 0.03 * invPi;
+    sunLightingColorRaw += moonLighting;
+    skyLightingColorRaw += moonLighting * bR * 4000.0;
+
+    //skyLightingColorRaw += skyLihgtingExtinction * maxComponent(moonLighting) * 0.03 * invPi * 0.01;
+
+    //skyLightingColorRaw *= 1.0 + sunLightingExtinction;
+    //sunLightingExtinction /= 1.0 + 0.3;
 
     if(night){
       //sunLightingColorRaw *= 2.0;
-      skyLightingColorRaw *= 4.0;
+      //skyLightingColorRaw *= 4.0;
     }
 
     sunLightingColor = sunLightingColorRaw;

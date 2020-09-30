@@ -1,3 +1,9 @@
 #version 130
-#define Gen_Water_Color
-#include "../program/composite.vsh"
+
+out vec2 texcoord;
+
+void main() {
+  texcoord = gl_MultiTexCoord0.st;
+
+  gl_Position = ftransform();
+}

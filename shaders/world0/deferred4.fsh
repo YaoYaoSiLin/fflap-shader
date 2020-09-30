@@ -13,7 +13,7 @@
 #define AtmosphericScattering_Steps 8
 #define AtmosphericScattering_Stepss 8
 
-#define GI_Rendering_Scale 0.353553
+#define GI_Rendering_Scale 0.5 //[0.353553 0.5]
 
 const int noiseTextureResolution = 64;
 
@@ -219,7 +219,7 @@ float voronoi(in vec2 x){
 
   for(int i = -1; i <= 1; i++) {
     for(int j = -1; j <= 1; j++) {
-      vec2 g = vec2(float(i), float(j));
+      vec2 g = vec2(i, j);
       vec2 o = hash2(n + g);
 
       vec2 r = g + o - f;
@@ -669,6 +669,23 @@ vec4 LowDetailSampler0p5x(in sampler2D sampler, in vec2 coord, int decode){
   return tex / float(count);
 }
 
+vec4 ImportanceSampleGGX(in vec2 E, in float roughness){
+  roughness *= roughness;
+  //roughness = clamp(roughness, 0.01, 0.99);
+
+  float Phi = E.x * 2.0 * Pi;
+  float CosTheta = sqrt((1 - E.y) / ( 1 + (roughness - 1) * E.y));
+	float SinTheta = sqrt(1 - CosTheta * CosTheta);
+
+  float D = DistributionTerm(roughness, CosTheta) * CosTheta;
+  if(CosTheta < 0.0) return vec4(0.0, 0.0, 1.0, D);
+
+  vec3 H = vec3(cos(Phi) * SinTheta, sin(Phi) * SinTheta, CosTheta);
+       //H.xy *= 0.1;
+
+  return vec4(H, D);
+}
+
 vec3 UpSampleRSM(in vec2 coord, in vec3 normal1x, in float depth1x){
   vec3 tex = vec3(0.0);
 
@@ -679,19 +696,21 @@ vec3 UpSampleRSM(in vec2 coord, in vec3 normal1x, in float depth1x){
 
   //vec3 normalLD = LowDetailSampler0p5x(composite, texcoord, 1).xyz;
   //float depthLD = LowDetailSampler0p5x(depthtex0, texcoord, 2).x;
+  #if 1
 
   int count = 0;
   float weights = 0.0;
-
+  /*
   coord *= resolution;
 
-  for(int i = 0; i <= 6; i++){
-    for(int j = 0; j <= 6; j++){
-      vec2 offset = (vec2(i, j) - 3.0);
+  for(int i = 0; i <= 3; i++){
+    for(int j = 0; j <= 3; j++){
+      vec2 offset = (vec2(i, j) - 1.5);
       float weight = 1.0;
 
       vec2 coordoffset = round(coord + offset) * pixel;
-      if(coordoffset.x > 0.5 - pixel.x || coordoffset.y > 0.5 - pixel.y) continue;
+      if(coordoffset.x > 0.5 - pixel.x || coordoffset.y > 0.5 - pixel.y) break;
+      coordoffset -= jittering * pixel;
 
       vec3 sampleColor = texture2D(gaux2, coordoffset).rgb;
       float sampleDepth = linearizeDepth(texture(gaux2, coordoffset + vec2(0.5)).x);
@@ -712,8 +731,107 @@ vec3 UpSampleRSM(in vec2 coord, in vec3 normal1x, in float depth1x){
 
   //tex /= float(count);
   if(weights > 0.0) tex /= weights;
+  */
 
-  //tex = texture2D(gaux2, texcoord * 0.5 + vec2(0.0, 0.5)).ggg;
+  tex = vec3(0.0);
+
+  float sigma = 0.83;
+  float sigma2 = sigma * sigma;
+
+  float coe = 1.0 / pow2(sqrt(2.0 * Pi * sigma));
+
+  coord = (coord * resolution);
+
+  for(int i = 0; i < 5; i++){
+    for(int j = 0; j < 5; j++){
+      vec2 offset = vec2(i, j) - 2.0;
+
+      vec2 coordoffset = round(coord + offset) * pixel;
+      if(coordoffset.x > 0.5 - pixel.x * 2.0 || coordoffset.y > 0.5 - pixel.y * 2.0) break;
+
+      vec3 sampleNormal = texture2D(gaux2, coordoffset + vec2(0.5, 0.0)).rgb * 2.0 - 1.0;
+      float ndotnl = dot(sampleNormal, normal1x);
+      if(ndotnl <= 0.0) continue;
+
+      float weight = coe * exp(-(ndotnl * ndotnl) / (2.0 * sigma2));
+
+      float sampleDepth = linearizeDepth(texture(gaux2, coordoffset + vec2(0.5)).x);
+      float dtodl = abs(sampleDepth - depth1x) * 128.0;
+
+      weight *= coe * exp(-(dtodl * dtodl) / (2.0 * sigma2));
+
+      tex += texture2D(gaux2, coordoffset).rgb * weight;
+      weights += weight;
+    }
+  }
+
+  tex /= weights;
+
+  #else
+  tex = texture2D(gaux2, texcoord * GI_Rendering_Scale).rgb;
+  /*
+  vec3 rayOrigin = nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, texture(depthtex0, texcoord).x) * 2.0 - 1.0));
+
+  vec3 normal = normal1x;
+  vec3 worldNormal = mat3(gbufferModelViewInverse) * normal;
+
+  vec3 upVector = abs(worldNormal.z) < 0.4999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+  upVector = mat3(gbufferModelView) * upVector;
+
+	vec3 t = normalize(cross(upVector, normal));
+	vec3 b = cross(normal, t);
+	mat3 tbn = mat3(t, b, normal);
+
+  float blueNoise = GetBlueNoise(depthtex2, texcoord, resolution.y, jittering * 0.0);
+
+  float CosTheta = sqrt((1 - blueNoise) / ( 1 + (0.7 - 1) * blueNoise));
+	float SinTheta = sqrt(1 - CosTheta * CosTheta);
+
+  float r = abs(blueNoise - 0.5) * 2.0 * 2.0 * Pi;
+  vec3 ramdomDirection = vec3(cos(r) * SinTheta, sin(r) * SinTheta, 1.0);
+       ramdomDirection = normalize(tbn * ramdomDirection);
+  vec3 rayDirection = normalize(reflect(normalize(rayOrigin), ramdomDirection));
+
+  int steps = 4;
+  float invsteps = 1.0 / float(steps);
+
+  float radius = 1.0;
+  rayDirection *= radius;
+
+  vec3 rayStart = rayOrigin + rayDirection;
+
+  for(int i = 0; i < steps; i++){
+    vec3 testPoint = rayStart - rayDirection * invsteps;
+
+    vec3 Coord = nvec3(gbufferProjection * nvec4(testPoint)) * 0.5 + 0.5;
+    if(clamp(Coord.xy, pixel * 2.0, 1.0 - pixel * 2.0) != Coord.xy) break;
+
+    float sampleDepth = texture(depthtex0, Coord.xy).x;
+    vec3 samplePosition = nvec3(gbufferProjectionInverse * nvec4(vec3(Coord.xy, texture(depthtex0, Coord.xy).x) * 2.0 - 1.0));
+    vec3 halfPosition = rayOrigin - samplePosition;
+
+    if(Coord.z < sampleDepth) continue;
+    //if(length(samplePosition - testPoint) < 1.0 - float(i) * invsteps) continue;
+
+    vec3 sampleColor = texture2D(gaux2, Coord.xy * GI_Rendering_Scale).rgb * texture2D(gcolor, Coord.xy).rgb;
+    vec3 sampleNormal = normalDecode(texture2D(composite, Coord.xy).xy);
+
+    vec3 lightingDirection = normalize(testPoint - rayOrigin);
+    float sampleNdotl = saturate(dot(lightingDirection, normal)) * saturate(dot(-lightingDirection, sampleNormal));
+
+    float sampleFading = pow4(length(halfPosition));
+
+    tex += sampleColor * sampleNdotl / max(1.0, sampleFading);
+  }
+
+  //tex *= 0.2;
+  tex *= 1.0;
+  //tex *= float(clamp(Coord.xy, pixel * 2.0, 1.0 - pixel * 2.0) == Coord.xy);
+
+  tex += texture2D(gaux2, texcoord * GI_Rendering_Scale).rgb;
+  */
+  #endif
+
 
   return tex;
 }
@@ -773,8 +891,8 @@ void main() {
   float emissive = lightingData.a;
   float selfShadow = texture2D(gnormal, texcoord).a;
   #if MC_VERSION > 11404
-    selfShadow = 1.0;
-    emissive = 0.0;
+    //selfShadow = 1.0;
+    //emissive = 0.0;
   #endif
 
   vec3 normalVisible = normalDecode(texture2D(gnormal, texcoord).xy);
@@ -820,8 +938,9 @@ void main() {
     vec3 normal = nvec3(gbufferProjectionInverse * nvec4(vec3(0.5, 0.5, 0.7) * 2.0 - 1.0));
          normal = normalize(-normal);
 
-    normalVisible = normal;
-    normalSurface = normal;
+    //normalVisible = normal;
+    //blockNormal = normalVisible;
+    //normalSurface = normal;
   }
 
   float viewLength = length(vP.xyz);
@@ -856,34 +975,25 @@ void main() {
       //ao = pow(ao, 2.2);
     #endif
 
-    float translucentShadowMaps = 0.0;
-    float shadowMapIrrdiance = 0.0;
+    float blocksSideSunVisibility = step(0.01, dot(blockNormal, nshadowLightPosition));
 
-    //vec3 sss = vec3(1.0);
-    //float sssRadius = NormalizedDiffusion(length(normalize(shadowLightPosition) - normalize(vP.xyz)), 1.0);
-
-    vec4 sunShading = CalculateShading(shadowtex1, shadowtex0, wP, selfShadow, normalSurface, translucentShadowMaps, shadowMapIrrdiance);
-    vec3 shading = mix(vec3(1.0), sunShading.rgb, sunShading.a) * selfShadow;
-
-    //vec3 woolScattering = exp(-sss.x * 0.25) * albedoL;
-         //woolScattering = L2Gamma(woolScattering);
-    /*
-    sss += sqrt(sss * sss + pow2(1.0 / sssRadius) * 0.01);
-    sss = exp(-sss * (1.0 + maxComponent(albedo.rgb) * 7.0));
-    //sss *= sssRadius;
-    sss *= (albedoL);
-    sss = L2Gamma(sss);
-    */
+    vec4 sunShading = CalculateShading(shadowtex1, shadowtex0, wP, blocksSideSunVisibility, blockNormal);
+    vec3 shading = mix(vec3(1.0), sunShading.rgb, sunShading.a);
 
     #ifdef Enabled_ScreenSpace_Shadow
-      float sdfShadow = ScreenSpaceShadow(shadowLightPosition, vP.xyz, blockNormal);
+      vec3 sssDirection = vP.xyz;
+           sssDirection += blockNormal * sqrt(vP.z * vP.z) * 0.001 * blocksSideSunVisibility;
+
+      float sdfShadow = ScreenSpaceShadow(nshadowLightPosition, sssDirection);
       //shading = vec3(1.0);
       shading *= sdfShadow;
     #endif
 
-    vec3 sunLighting = BRDF(albedoL, nlightPosition, -nvP, normalVisible, normalSurface, roughness, metallic, F0);
+    if(!bool(blocksSideSunVisibility)) shading = vec3(0.0);
+
+    vec3 sunLighting = BRDFLighting(albedo.rgb, normalize(shadowLightPosition), -nvP, normalVisible, normalSurface, L2Gamma(F0), roughness, metallic);
          sunLighting *= shading * fading;
-         sunLighting = rgb2L(sunLighting) * sunLightingColorRaw;
+         sunLighting = (sunLighting) * sunLightingColorRaw;
     if(isEyeInWater != 1) sunLighting *= smoothstep(0.7333, 0.8, max(float(eyeBrightness.y) / 60.0, lightingData.y));
          //sunLighting = sunLighting * vec3(0.008, 0.02, 0.09);
     color = sunLighting * SunLight;
@@ -909,30 +1019,48 @@ void main() {
     float ldotu = max(0.0, dot(nshadowLightPosition, centerupPosition));
 
     vec3 ambient = albedo.rgb * skyLightingColorRaw * (ao + ndotu + 1.0) * 0.333;
-    //vec3 ambient = albedo.rgb * skyLightingColorRaw * (ao + ndotu * 0.5 + 0.5) / 1.5;
-    vec3 bounce = albedo.rgb * skyLightingColorRaw * ao * clamp01(-ndotu) * pow2(ldotu) * skyLightingMap;
 
     vec3 diffuse = ambient * skyLightingMap;
 
     #ifdef Global_Illumination
-    vec3 indirect = UpSampleRSM(texcoord, normalSurface, depth).rgb * (1.0 - metallic);
+    vec3 indirect = UpSampleRSM(texcoord, normalSurface, depth).rgb;
     //indirect = sqrt(indirect * getLum(indirect));
-    indirect = L2Gamma(indirect * invPi);
+    //indirect = L2Gamma(indirect);
 
     //indirect *= normalize(albedo.rgb) * sqrt(getLum(albedo.rgb));
-    diffuse += indirect * 8.0 * albedo.rgb * sunLightingColorRaw * SunLight * fading;
+    diffuse += indirect * invPi * albedo.rgb * sunLightingColorRaw * SunLight * fading * (1.0 - metallic);
+    #else
+    vec3 indirect = albedo.rgb * sunLightingColorRaw * fading * SunLight * invPi;
+
+    indirect *= saturate(pow5(dot(-centerupPosition, normalSurface) + 1.0));
+    indirect *= dot03(skyLightingColorRaw) * skyLightingMap * ao;
+
+    //diffuse += indirect * 3.0;
     #endif
 
-    translucentShadowMaps = exp(-translucentShadowMaps * 0.33 / d);
+    float lightingRadius = max(float(heldBlockLightValue), float(heldBlockLightValue2));;
 
-    vec3 transmittance = albedoL * translucentShadowMaps;
-         transmittance *= float(isLeaves || isGrass || isWool);
-         transmittance *= FD90 * FdV * FdL * invPi * max(0.0, 1.0 + -ndotl) * 0.5 / max(1.0, d);
-         transmittance = L2Gamma(transmittance);
+    vec3 heldLightingBRDF = BRDFLighting(albedo.rgb, -nvP, -nvP, normalVisible, normalSurface, L2Gamma(F0), roughness, metallic);
 
-    diffuse += transmittance * SunLight * fading * sunLightingColorRaw;
+    float heldLightingDistance = max(0.0, lightingRadius - viewLength) / lightingRadius;
+          heldLightingDistance = pow2(heldLightingDistance * heldLightingDistance);
+    vec3 heldLighting = clamp01(1.0 - exp(-torchLightingColor * heldLightingDistance * 0.125));
+         heldLighting *= heldLightingBRDF;
 
-    diffuse *= rgb2L(1.0 - max(f, metallic) * brdf);
+    float torchLightMap = max(0.0, blocksLightingMap - 0.0667) * 1.071;
+          torchLightMap = pow2(torchLightMap * torchLightMap);
+
+    vec3 lightMapLighting = clamp01(1.0 - exp(-(torchLightingColor) * 0.125 * torchLightMap));
+         lightMapLighting *= albedo.rgb;
+         lightMapLighting *= pow5(abs(dot(normalSurface, blockNormal)));
+         lightMapLighting *= mix(vec3(1.0), albedo.rgb * max(0.0, blocksLightingMap * 16.0 - 14.5), step(0.5, metallic));
+
+    vec3 torchLignting = (lightMapLighting + heldLighting * Pi);
+         torchLignting *= exp(-maxComponent(sunLightingColorRaw + skyLightingColorRaw) * Pi * skyLightingMap);
+
+    color += (torchLignting);
+
+    diffuse *= (1.0 - max(f, metallic) * brdf);
 
     color += diffuse;
 
@@ -942,34 +1070,8 @@ void main() {
     //color += woolScattering * SunLight * sunLightingColorRaw * clamp01(-ndotl + 0.5) * invPi * float(isWool || isLeaves);
     //color = sss;
 
-    float lightingRadius = max(heldBlockLightValue, heldBlockLightValue2);
-    //float heldLightingFading = max((lightingDistance * 0.5 - viewLength) * float(heldBlockLightValue) * 0.0074, 0.0);
-    //      heldLightingFading *= heldLightingFading;
-
-    vec3 heldLightingBRDF = BRDF(albedoL, -nvP, -nvP, normalVisible, normalSurface, roughness, metallic, rgb2L(F0));
-         heldLightingBRDF = L2Gamma(heldLightingBRDF);
-
     //vec3 heldLighting = 1.0 - exp(-(torchLightingColor) * 0.125 * heldLightingFading);
          //heldLighting = heldLighting * heldLightingBRDF * 8.0;
-
-    float heldLightingDistance = max(0.0, lightingRadius - viewLength) / lightingRadius;
-          heldLightingDistance = pow3(heldLightingDistance);
-    vec3 heldLighting = clamp01(1.0 - exp(-torchLightingColor * heldLightingDistance * 0.125));
-         heldLighting *= heldLightingBRDF * 8.0;
-
-    blocksLightingMap = max(blocksLightingMap - 0.06667,0.0) * 1.07143;
-    blocksLightingMap -= blocksLightingMap * step(0.5, metallic) * brdf;
-    blocksLightingMap = blocksLightingMap / (1.0+blocksLightingMap) * 2.0;
-    blocksLightingMap = pow3(blocksLightingMap);
-
-    vec3 lightMapLighting = clamp01(1.0 - exp(-(torchLightingColor) * 0.125 * blocksLightingMap));
-         //torchLignting *= pow5(lightingmu.x * 0.5 + lightingmu.y * 0.5);
-         lightMapLighting *= albedo.rgb;
-
-    vec3 torchLignting = (lightMapLighting * 0.0 + heldLighting);
-    torchLignting *= exp(-maxComponent(sunLightingColorRaw + skyLightingColorRaw) * Pi * skyLightingMap);
-
-    color += (torchLignting);
 
     //vec3 reflectionSky = CalculateSky(reflectP, sP, 0.0, 1.0);
     //color += rgb2L(brdf * brdf * f) * reflectionSky;
@@ -986,7 +1088,19 @@ void main() {
     //color = texture2D(gaux2, texcoord).rgb * 0.1;
     //color = L2Gamma(color) * 0.5;
 
+    //color = BRDFLighting(albedo.rgb, -nvP, -nvP, normalVisible, normalSurface, L2Gamma(F0), roughness, metallic);
+
+    //color = vec3(G(max(0.0, dot(normalSurface, normalize(sunPosition))), roughness) * G(max(0.0, dot(normalSurface, -nvP)), roughness)) * 0.01;
+    //color = F(F0, pow5(1.0 - max(0.0, dot(-nvP, normalSurface))));
+
     albedo.a = 1.0;
+    //color = indirect * 0.1;
+    //color = indirect;//L2Gamma(texture2D(gaux2, texcoord * GI_Rendering_Scale).rgb) * 0.1;
+    //color = texture2D(gaux2, texcoord * 0.5).rgb;
+
+    //color = L2Gamma(shading.rgb) * 0.01;
+
+    //color = vec3(sdfShadow);
     //color = sss;
     //color = vec3(ao) * 0.01;
     //color = albedo.rgb / maxComponent(albedo.rgb) * getLum(albedo.rgb) * (pow2(1.0 - maxComponent(albedo.rgb)) * 0.99 + 0.01);
@@ -999,14 +1113,66 @@ void main() {
     //color = vec3(dot(direction, worldNormal));
 
     //color = vec3(ComputeCoarseAO(vP.xyz, normalSurface)) * 0.1;
-
+    //color *= Extinction(500.0, viewLength);
+    //color += InScattering(vec3(0.0, cameraPosition.y - 63.0, 0.0), normalize(wP.xyz), sP, 500.0, viewLength, 0.76, dot(normalize(wP.xyz), sP));
   }else{
     albedo.a = 0.0;
 
-    vec3 atmoScattering = CalculateSky(normalize(vP.xyz), sP, 0.0, 1.0);
+    vec3 skyPosition = normalize(wP.xyz);
+    vec3 eyePosition = vec3(0.0, cameraPosition.y - 63.0, 0.0);
+
+    vec2 tDay = RaySphereIntersection(vec3(0.0, rA, 0.0), sP, vec3(0.0), rE);
+    vec2 tNight = RaySphereIntersection(vec3(0.0, rA, 0.0), -sP, vec3(0.0), rE);
+    vec2 tE = RaySphereIntersection(eyePosition + rE, skyPosition, vec3(0.0), rE);
+
+    vec3 atmoScatteringDay = vec3(0.0);
+    vec3 atmoScatteringNight = vec3(0.0);
+
+    if(bool(step(tDay.x, 0.0))) atmoScatteringDay = CalculateInScattering(eyePosition, skyPosition, sP, 0.76, ivec2(16, 2), vec3(1.0, 1.0, 0.3));
+    if(bool(step(tNight.x, 0.0))) atmoScatteringNight = CalculateInScattering(eyePosition, skyPosition, -sP, 0.76, ivec2(16, 2), vec3(1.0, 1.0, 0.0)) * 0.03;
+
+    vec3 atmoScattering = atmoScatteringDay + atmoScatteringNight;
+         atmoScattering = ApplyEarthSurface(atmoScattering, eyePosition, skyPosition, sP);
 
     vec3 skyColor = atmoScattering;
 
+    float moonDistance = 5.2;
+    float moonSize = 1590e3;
+
+    vec2 tMoon = RaySphereIntersection(vec3(0.0, moonDistance * 5.0 * moonSize, 0.0), vec3(0.0, -1.0, 0.0), vec3(0.0), moonSize);
+
+    vec2 moonAtlasScale = vec2(textureSize(depthtex1, 0));
+    float moonAspectRatio = 1.0 / (moonAtlasScale.x / moonAtlasScale.y);
+
+    vec2 moonPhases = vec2(0.0);
+         moonPhases.x += 0.5 * mod(moonPhase, 4);
+         if(moonPhase > 3) moonPhases.y += 0.5;
+
+    //idk
+    vec3 moonPosition = skyPosition + sP / (1.0 - sP.y) * (1.0 + skyPosition.y);
+
+    vec2 moonUV = -moonPosition.xz;
+         moonUV *= 0.25;  //pre-tile size after aspectratio correction
+         moonUV *= 0.333;   //moon size in one tile
+         moonUV = moonUV * (tMoon.y) / moonSize;
+         moonUV += vec2(0.25);
+
+    bool choseMoonPhase = floor((moonUV) * vec2(4.0 * moonAspectRatio, 2.0)) == vec2(0.0);
+
+    moonUV += moonPhases;
+    moonUV.x *= moonAspectRatio;
+
+    vec4 moonTexture = texture2D(depthtex1, moonUV);
+         moonTexture.rgb = rgb2L(moonTexture.rgb);
+
+    vec3 moonColor = Extinction(vec3(0.0), -sP);
+
+    if(choseMoonPhase && tMoon.x > 0.0) skyColor += dot03(moonTexture.rgb) * step(0.05, moonTexture.a) * moonColor * step(tE.x, 0.0);
+    //if(tMoon.x <= 0.0) skyColor = vec3(0.0, 1.0, 0.0);
+    //skyColor += dot03(moonTexture.rgb) * float(floor(moonUV) == vec2(0.0));
+
+    color = skyColor;
+    /*
     float top = clamp01(wP.y / length(wP.xyz) * 100.0);
     float sundotv = clamp01(dot(nsunPosition, nvP));
     float moondotv = clamp01(dot(-nsunPosition, nvP));
@@ -1062,8 +1228,8 @@ void main() {
     skyColor += max(0.0, stars - maxComponent(skyColor) * 324.0) * top * 6.0;
 
     //color = mix(skyColor, color, albedo.a);
-    color = skyColor;
-
+    color = atmoScattering;
+    */
     //color = vec3(HGPF(moondotv, 0.96) * 0.0016);
 
     //CalcCirrus(color, wPJ.xyz, cameraPosition, lightPosition);
@@ -1094,6 +1260,7 @@ void main() {
   //if(skyLightingMap < 0.001) color += vec3(1.0, 0.0, 0.0);
 
   color = L2rgb(color);
+
   /*
   vec2 fragCoord = floor(texcoord * resolution);
   bool checkerBoard = bool(mod(fragCoord.x + fragCoord.y, 2));

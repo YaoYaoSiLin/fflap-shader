@@ -29,10 +29,17 @@ float bayer_64x64(in vec2 a, vec2 r){
   return bayer64(a * r);
 }
 
-float hash(vec2 p) {
-	vec3 p3 = fract(vec3(p.xyx) * 0.2031);
-	p3 += dot(p3, p3.yzx + 19.19);
-	return fract((p3.x + p3.y) * p3.z);
+float hash(in vec2 p)  // replace this by something better
+{
+    p  = 50.0*fract( p*0.3183099 + vec2(0.71,0.113));
+    return -1.0+2.0*fract( p.x*p.y*(p.x+p.y) );
+}
+
+float hash(in vec3 p)  // replace this by something better
+{
+    p  = fract( p*0.3183099+.1 );
+	  p *= 17.0;
+    return fract( p.x*p.y*p.z*(p.x+p.y+p.z) );
 }
 
 //The Unreasonable Effectiveness of Quasirandom Sequences | Extreme Learning
@@ -48,4 +55,10 @@ float R2sq(in vec2 coord){
   //coord = floor(coord);
 
   return t(mod(coord.x * a1 + coord.y * a2, 1));
+}
+
+float GetBlueNoise(in sampler2D tex, in vec2 uv, float uvScale, vec2 jitter){
+  float noiseScale = 64.0;
+  uv = uv * vec2(aspectRatio, 1.0) * uvScale / noiseScale;
+  return texture(tex, uv - jitter).x;
 }

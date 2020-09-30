@@ -24,54 +24,48 @@ vec3 P2UV(in vec3 P){
 
 #define SSR_Type SSR_3D
 
-vec4 rayMarching(in vec3 rayDirection, in vec3 viewPosition, out vec3 hitPosition, in float roughness, in float mipMap){
+vec4 rayMarching(in vec3 rayDirection, in vec3 viewPosition, out vec3 hitPosition){
   vec2 hitUV = vec2(0.0);
 
   int count;
 
-  //viewPosition -= rayDirection * 0.02 * dither;
-
   int steps = 20;
   float invsteps = 1.0 / float(steps);
 
-  float dither = R2sq(texcoord * resolution);
+  float dither = R2sq(texcoord * resolution * SSR_Rendering_Scale);
 
-  //rayDirection *= invsteps;
-  //rayDirection *= lerq(dither, 1.0, 0.9);
-  rayDirection *= 0.5;
-  //rayDirection *= mix(dither, 1.0, 0.95);
+  //rayDirection *= 0.5 + dither * 0.5;
+  //rayDirection *= mix(dither, 0.5, 0.7);
 
-  float depth = texture(depthtex0, texcoord).x;
-
-  float rayEnd = 768.0;
+  float rayEnd = 600.0;
   float rayStep = pow(rayEnd, invsteps);
 
-  for(int i = 0; i < steps; i++){
-    viewPosition += rayDirection;
+  vec3 testPosition = viewPosition;
 
-    vec2 uv = P2C(viewPosition);
+  for(int i = 0; i < steps; i++){
+    testPosition += rayDirection;
+
+    vec2 uv = P2C(testPosition);
     if(floor(uv) != vec2(0.0)) break;
 
     float sampleDepth = (texture2D(depthtex0, uv).x);
     vec3 samplePosition = nvec3(gbufferProjectionInverse * vec4(vec3(uv, sampleDepth) * 2.0 - 1.0, 1.0));
 
-    float testDepth = linearizeDepth(P2UV(viewPosition).z);
+    float testDepth = linearizeDepth(P2UV(testPosition).z);
     float forntDepth = linearizeDepth(sampleDepth);
 
     if(testDepth > forntDepth){
-      //if(testDepth - linearlizeSampleDepth < (exp2(8.0) / 2048.0) / float(count + 1)){
-        float backDepth = linearizeDepth(sampleDepth + 0.001);
+      float backDepth = linearizeDepth(sampleDepth + 0.001);
 
-      if(testDepth - forntDepth < (1.0 + forntDepth * 511.0 / float(count + 1)) * (1.0 / 2048.0)){
+      if(testDepth - forntDepth < (1.0 + forntDepth * 256.0 * float(count + 1)) * (1.0 / 2048.0)){
         hitUV = uv;
-        hitPosition = samplePosition;
+        hitPosition = testPosition;
         count++;
-        if(count > 1) break;
+        //if(count > 1) break;
       }
 
-
-      viewPosition -= rayDirection;
-      rayDirection *= 0.01;
+      testPosition -= rayDirection;
+      rayDirection *= 0.05;
     }else{
       rayDirection *= rayStep;
     }
@@ -79,47 +73,33 @@ vec4 rayMarching(in vec3 rayDirection, in vec3 viewPosition, out vec3 hitPositio
   return vec4(hitUV, 0.0, 0.0);
 }
 
-vec4 raytrace(in vec3 viewVector, in vec3 rayDirection, out vec3 hitPosition, in float roughness, in float mipMap){
+vec4 raytrace(in vec3 viewVector, in vec3 rayDirection, out vec3 hitPosition, in float dither){
   vec4 color = vec4(0.0);
 
   vec3 testPoint = viewVector;
 
-  //rayDirection *= 0.5;
+  rayDirection *= mix(dither, 0.5, 0.7);
 
-  vec4 ray = rayMarching(rayDirection, testPoint, hitPosition, roughness, mipMap);
-
-  //float radius = mipMap * length(ray.xy - texcoord);
-  //      radius = clamp(log2(radius * resolution.x), 0.0, 6.2831);
-  /*
-  float dither = R2sq(texcoord * resolution * SSR_Rendering_Scale);
-
-  float steps = 8.0 / SSR_Rendering_Scale;
-  float invsteps = 1.0 / steps;
-  float frameIndex = mod(float(frameCounter), steps);
-
-  float r = (frameIndex * invsteps + dither) * Pi * 2.0;
-  vec2 offset = vec2(cos(r), sin(r)) * 0.01;
-  */
+  vec4 ray = rayMarching(rayDirection, testPoint, hitPosition);
 
   if(ray.x > 0.0 && ray.y > 0.0) {
-    //color = texture2DLod(gaux2, ray.xy + jittering * pixel * SSR_Rendering_Scale * 0.0, radius);
-
-    #if Surface_Quality == Low
-    color = texture2DLod(gaux2, ray.xy, 0.0);
-    hitPosition.z = texture2DLod(depthtex0, ray.xy, 0.0).x;
-    #else
-    //hitPosition.xy = ray.xy;
-    color = texture2DLod(gaux2, ray.xy, 0.0);
-    //color.a = 1.0;
-    #endif
     /*
-    for(int i = 0; i < int(steps); i++){
-      float r = (i * invsteps + dither) * 2.0 * Pi;
-      hitPosition.z += texture(depthtex0, ray.xy + offset * radius * 0.0025).x;
+    ray.xy = round(ray.xy * resolution) * pixel;
+
+    for(int i = 0; i < 4; i++){
+      for(int j = 0; j < 4; j++){
+        vec2 offset = vec2(i, j) - 1.5;
+        float weight = gaussianBlurWeights(offset+0.001);
+
+        color += texture2D(gaux2, ray.xy + offset * pixel);
+       }
     }
 
-    hitPosition.z *= invsteps;
-    */
+    color /= 16.0;
+*/
+    color = texture2D(gaux2, ray.xy);
+
+    color.a = 1.0;
   }
 
   return color;

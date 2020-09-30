@@ -3,23 +3,6 @@
   #define Bloom_First_Steps 1			//[1 2 3 4 5 6 7 8]
   #define Bloom_Sample_Scale 1.25 //[0.8 0.9 1.0 1.1 1.25] enabled DEGBUG_Bloom to change bloom sample scale
 
-float gaussianBlurWeights(in float offset){
-  float o = 0.83;
-
-  o *= o;
-  offset *= offset;
-
-  return (1/(sqrt(2*Pi*o)))*exp(-(offset)/(2*o));
-}
-
-float gaussianBlurWeights(in vec2 offset){
-  float o = 0.83;
-
-  o *= o;
-  offset *= offset;
-
-  return (1.0f/(2.0f*Pi*o))*exp(-((offset.x+offset.y)/(2.0f*o)));
-}
 /*
 const float bloomWeights[9] = float[9](0.0541, 0.2326, 0.0541,
                                        0.2326, 0.4806, 0.2326,

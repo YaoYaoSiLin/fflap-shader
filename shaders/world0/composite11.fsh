@@ -73,6 +73,52 @@ vec3 KarisToneMapping(in vec3 color){
 	return color;
 }
 
+vec4 ReprojectSampler(in sampler2D tex, in vec2 pixelPos){
+	vec4 result = vec4(0.0);
+
+	float weights = 0.0;
+
+	vec3 centerColor = texture2D(tex, pixelPos).rgb * overRange;
+
+	vec3 minColor = vec3(100.0);
+	vec3 maxColor = vec3(0.0);
+
+	for(float i = -1.0; i <= 1.0; i += 1.0){
+		for(float j = -1.0; j <= 1.0; j += 1.0){
+			vec2 samplePos = vec2(i, j) * 0.5;
+			float weight = gaussianBlurWeights(samplePos + 0.0001);
+
+			vec4 sampler = texture2D(tex, pixelPos + samplePos * pixel);
+
+			vec3 sampler2 = texture2D(tex, pixelPos + vec2(i, j) * pixel).rgb * overRange;
+			minColor = min(minColor, sampler2);
+			maxColor = max(maxColor, sampler2);
+
+			weights += weight;
+			result += sampler * weight;
+		}
+	}
+
+	result /= weights;
+	result *= overRange;
+
+	vec3 blend = saturate((maxColor - minColor) / centerColor);
+			 blend = mix(vec3(0.25), vec3(0.75), blend);
+
+	result.rgb = mix(centerColor, result.rgb, blend);
+
+
+	return result;
+}
+
+vec4 opElongate( in vec3 p, in vec3 h )
+{
+    //return vec4( p-clamp(p,-h,h), 0.0 ); // faster, but produces zero in the interior elongated box
+
+    vec3 q = abs(p)-h;
+    return vec4(max(q,vec3(0.0)), min(maxComponent(q), 0.0));
+}
+
 void main() {
   vec4 bloom = vec4(0.0);
 
@@ -81,43 +127,23 @@ void main() {
   #endif
 
   vec3 color = texture2D(gaux2, texcoord).rgb;
-	/*
-	vec3 sharpen = vec3(0.0);
-
-	for(float i = -1.0; i <= 1.0; i += 1.0){
-		for(float j = -1.0; j <= 1.0; j += 1.0){
-			sharpen += texture2D(gaux2, texcoord + vec2(i, j) / MC_RENDER_QUALITY * pixel).rgb;
-		}
-	}
-
-	sharpen -= color;
-	sharpen *= 0.125;
-	sharpen -= color;
-
-	color += sharpen * 0.1;
-	*/
-	//color = clamp01(color);
-
-/*
-	vec2 fragCoord = round(texcoord * 0.5 * resolution);
-	if(mod(fragCoord.x + fragCoord.y, 2) > 0.5 && texcoord.x < 0.5) {
-		//color = vec3(0.0);
-		vec3 s1 = texture2D(gaux2, texcoord + vec2(pixel.x, 0.0)).rgb;
-		vec3 s2 = texture2D(gaux2, texcoord - vec2(pixel.x, 0.0)).rgb;
-		vec3 s3 = texture2D(gaux2, texcoord + vec2(0.0, pixel.y)).rgb;
-		vec3 s4 = texture2D(gaux2, texcoord - vec2(0.0, pixel.y)).rgb;
-		vec3 minColor = min(s1, min(s2, min(s3, s4)));
-		vec3 maxColor = max(s1, max(s2, max(s3, s4)));
-		vec3 weight = clamp(clamp01((maxColor - minColor) / (color)), vec3(0.1), vec3(0.5));
-		vec3 weight2 = 1.0 - weight;
-
-		color = (s1 + s2 + s3 + s4) * 0.25 * weight2 + weight * color;
-	}
-*/
 	color *= overRange;
+
+	//if(floor(coord) != vec2(0.0)) color = vec3(0.0);
 
 	#if defined(Enabled_TAA) && TAA_ToneMapping > OFF
 	//if(texcoord.x > 0.5)
+	color = ReprojectSampler(gaux2, texcoord).rgb;
+	//color = texture2D(gaux2, round(texcoord * resolution) * pixel).rgb * overRange;
+
+	//color = getLum(color);
+	//color = color * vec3(0.25, 0.3, 0.45) / 0.5;
+
+	//float luma = getLum(color);
+
+	//color = mix(color * vec3(0.2, 0.99, 0.5) * 2.0, color, saturate((luma * overRange - 0.5)));
+	//color = mix(color * vec3(0.2, 0.3, 0.5) * 2.0, color, saturate(vec3(luma) * overRange * 127.0 - 127.0));
+
 	color = KarisToneMapping(color);
 	#endif
 

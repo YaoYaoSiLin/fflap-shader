@@ -61,8 +61,13 @@ void main() {
       + CalculateMaskIDVert(79.0, mc_Entity.x)
       + CalculateMaskIDVert(90.0, mc_Entity.x)
       + CalculateMaskIDVert(165.0, mc_Entity.x)
-      + CalculateMaskIDVert2(20.0, 95.0, mc_Entity.x)
-      + CalculateMaskIDVert2(106.0, 160.0, mc_Entity.x);
+      + CalculateMaskIDVert(20.0, mc_Entity.x)
+      + CalculateMaskIDVert(95.0, mc_Entity.x)
+      + CalculateMaskIDVert(106.0, mc_Entity.x)
+      + CalculateMaskIDVert(160.0, mc_Entity.x)
+      //+ CalculateMaskIDVert2(20.0, 95.0, mc_Entity.x)
+      //+ CalculateMaskIDVert2(106.0, 160.0, mc_Entity.x)
+      ;
 
   if(id == 8.0) {
     //id = 8.0;

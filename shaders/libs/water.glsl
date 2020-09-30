@@ -50,13 +50,18 @@
   }
 #endif
 
+#ifndef Gen_Water_Color
 vec4 CalculateWaterColor(in vec4 color){
   //color = vec4(color.rgb, 0.05);
 
-  color.a = (color.r + color.g) / (min(color.r, color.g) + 0.01) * (1.0 - color.b) * 0.25 / Pi;
+  //color.a = (color.r + color.g) / (min(color.r, color.g) + 0.01) * (1.0 - color.b) * 0.25 / Pi;
+  color.a = ((1.0 - color.b) + color.g) / maxComponent(color.rgb) * 0.1 + 0.15;
+  //color.a = pow2(color.a);
+
   //color.a = 0.01;
   //color.rgb = saturation(color.rgb, 1.0 + (min(color.r, color.g) - color.b)) / (maxComponent(color.rgb) * 0.2 + 0.8) * 1.1;
   //color.rgb = color.rgb * color.rgb;
 
   return color;
 }
+#endif

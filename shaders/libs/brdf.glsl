@@ -8,6 +8,13 @@ float DistributionTerm( float roughness, float ndoth )
 	return roughness / ( d * d * Pi );
 }
 
+float G(in float cost, in float roughness){
+  float a = roughness*roughness;
+  float b = cost * cost;
+
+  return 1.0 / (cost + sqrt(a + b - a * b));
+}
+
 float VisibilityTerm( float roughness, float ndotv, float ndotl )
 {
 	float gv = ndotl * sqrt( ndotv * ( ndotv - ndotv * roughness ) + roughness );
@@ -18,7 +25,7 @@ float VisibilityTerm( float roughness, float ndotv, float ndotl )
 float CalculateBRDF(in vec3 viewPosition, in vec3 rayDirection, in vec3 normal, float roughness){
   vec3 h = normalize(rayDirection + viewPosition);
 
-  float ndotv = 1.0 - clamp01(dot(viewPosition, normal));
+  float ndotv = clamp01(dot(viewPosition, normal));
   float ndoth = clamp01(dot(normal, h));
   float ndotl = clamp01(dot(rayDirection, normal));
 
@@ -28,61 +35,87 @@ float CalculateBRDF(in vec3 viewPosition, in vec3 rayDirection, in vec3 normal, 
   return max(0.0, d * g);
 }
 
-void FDG(inout vec3 f, inout float g, inout float d, in vec3 rayOrigin, in vec3 rayDirection, in vec3 n, in vec3 m, in vec3 F0, float roughness){
-  float ndotv = 1.0 - clamp01(dot(rayOrigin, m));
+void FDG(inout vec3 f, inout float g, inout float d, in vec3 rayOrigin, in vec3 rayDirection, in vec3 n, in vec3 F0, float roughness){
+  vec3 m = normalize(rayDirection + rayOrigin);
+
+  float ndotv = clamp01(dot(rayOrigin, m));
   float ndoth = clamp01(dot(n, m));
   float ndotl = clamp01(dot(rayDirection, n));
 
-  f = F(F0, pow5(ndotv));
+  f = F(F0, pow5(1.0 - ndotv));
   d = DistributionTerm(roughness * roughness, ndoth);
   g = VisibilityTerm(d, ndotv, ndotl);
 }
 
-//vec3 CalculateDiffuse
+#define BRDF_Bias 0.7
+
+#define HightLightNerf 0.996
+
+
+float ApplyBRDFBias(in float a){
+  return mix(a, 0.0, BRDF_Bias);
+}
 
 #if CalculateHightLight == 1
-vec3 BRDF(in vec3 albedo, in vec3 L, in vec3 viewPosition, in vec3 visibleNormal, in vec3 surfaceNormal, in float roughness, in float metallic, in vec3 F0){
-  //roughness *= roughness;
-  //roughness = max(roughness, 0.0001);
 
-  vec3 h = normalize(L + viewPosition);
+vec3 DisneyDiffuse(in vec3 l, in vec3 v, in vec3 n, in float a, in vec3 albedo){
+  vec3 h = normalize(l + v);
 
-  float vdoth = pow5(1.0 - clamp01(dot(viewPosition, h)));
-  float ndotl = clamp01(dot(surfaceNormal, L));
-  float ndoth = clamp01(dot(visibleNormal, h));
-  float ndotv = 1.0 - clamp01(dot(viewPosition, visibleNormal));
+  float hdotl = dot(l, h);
 
-  float c = 4.0 * (1.0 - ndotv) * ndotl;
+  float ndotl = max(0.0, dot(l, n));
+  float ndotv = max(0.0, dot(v, n));
 
-  float FD90 = clamp01(0.5 + 2.0 * roughness * ndoth * ndoth);
-  float FdV = 1.0 + (FD90 - 1.0) * vdoth;
-  float FdL = 1.0 + (FD90 - 1.0) * pow5(ndotl);
+  if(ndotv < 1e-4 || ndotl < 1e-4) return vec3(0.0);
 
-  vec3 f = F(F0, vdoth);
+  float FD90 = hdotl * hdotl * a * 2.0 + 0.5;
+
+  float FDV = 1.0 + (FD90 - 1.0) * pow5(ndotv);
+  float FDL = 1.0 + (FD90 - 1.0) * pow5(ndotl);
+
+  return albedo * invPi * FDL * FDV;
+}
+
+
+vec3 BRDFLighting(in vec3 albedo, in vec3 l, in vec3 v, in vec3 nvisible, in vec3 nfull, in vec3 F0, in float roughness, in float metallic){
+  roughness = ApplyBRDFBias(roughness);
+  roughness = mix(1.0, roughness, HightLightNerf);
+
+  vec3 h = normalize(l+v);
+
+  float ndotl = max(0.0, dot(l, nfull));
+  float ndotv = max(0.0, dot(v, nfull));
+
+  if(ndotl < 1e-5) return vec3(0.0);
+
+  float ndoth = max(0.0, dot(nfull, h));
+
+  float hdotl = max(0.0, dot(l, h));
+  float hdotv = max(0.0, dot(v, h));
+
+  float FD90 = hdotl * hdotl * roughness * 2.0 + 0.5;
+
+  float FDV = 1.0 + (FD90 - 1.0) * pow5(ndotv);
+  float FDL = 1.0 + (FD90 - 1.0) * pow5(ndotl);
+
+  vec3 diffuse = albedo.rgb * invPi * FDL * FDV;
+       diffuse *= (1.0 - step(0.5, metallic));
+
+  ndotl = max(0.0, dot(l, nvisible));
+  ndotv = max(0.0, dot(v, nvisible));
+  ndoth = max(0.0, dot(nvisible, h));
+
+  if(ndotl < 1e-5) return vec3(0.0);
+
+  vec3 f = F(F0, pow5(1.0 - hdotl));
   float d = DistributionTerm(roughness * roughness, ndoth);
-  float g = VisibilityTerm(d, ndotv, ndotl);
+  float g = G(ndotl, roughness) * G(ndotv, roughness);
+  float c = 4.0 * (1e-2 + ndotl * ndotv);
 
-  vec3 diffuse = albedo / Pi * FdV * FdL * (1.0 - metallic);
-  vec3 highLight = f * max(0.0, g * d) / max(1.0, c);
+  vec3 lighting = diffuse + f * g * d / c;
+       lighting *= saturate(pow5(dot(nfull, l) + 0.5) * 4.0);
 
-  vec3 rL = normalize(reflect(-viewPosition, visibleNormal));
-
-  vec3 specularityM = normalize(rL + viewPosition);
-
-  float vdotsh = pow5(1.0 - clamp01(dot(specularityM, viewPosition)));
-
-  vec3 specularityF = F(F0, vdotsh);
-  float specularityBrdf = CalculateBRDF(viewPosition, rL, visibleNormal, roughness);
-        //specularityBrdf = min(1.0, specularityBrdf * specularityBrdf);
-        //specularityBrdf = specularityBrdf * specularityBrdf * specularityBrdf;
-
-  vec3 specularity = clamp01(highLight / f * vdoth * 8.0) * min(vec3(1.0), specularityBrdf * specularityBrdf * specularityBrdf * specularityF);
-  specularity *= 0.01 / (vdoth + 0.001);
-  specularity += highLight;
-  //specularity *= step(1.0 - dot(viewPosition, surfaceNormal), 0.9);
-  //specularity = min(vec3(1.0), specularity);
-
-  return (diffuse + specularity) * min((ndotl * ndotl * 32.0), 1.0);
+  return lighting;
 }
 
 #endif

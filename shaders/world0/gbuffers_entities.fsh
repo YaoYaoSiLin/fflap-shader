@@ -89,10 +89,10 @@ void main() {
   //  selfShadow = 1.0;
   //}
 
-  float normalGlitchE = CalculateMaskID(77.0, float(entityId)) + CalculateMaskID(9.0, float(entityId));
-  float particelsID = 250.0;
-  mask += (particelsID - mask) * normalGlitchE;
-  selfShadow = (1.0 - selfShadow) * normalGlitchE;
+  //float normalGlitchE = CalculateMaskID(77.0, float(entityId)) + CalculateMaskID(9.0, float(entityId));
+  //float particelsID = 250.0;
+  //mask += (particelsID - mask) * normalGlitchE;
+  //selfShadow = (1.0 - selfShadow) * normalGlitchE;
 
   mask /= 255.0;
   //discard;

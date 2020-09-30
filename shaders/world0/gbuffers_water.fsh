@@ -71,7 +71,8 @@ vec2 normalEncode(vec3 n) {
 
 void main() {
   if(texture2D(gaux1, screenCoord).a < gl_FragCoord.z && texture2D(gaux1, screenCoord).a > 0.0) discard;
-//discard;
+  //if(gl_FragCoord.z > texture2D(depthtex0, screenCoord).x) discard;
+  //discard;
   float viewLength = length(vP);
   vec3 nvP = normalize(vP);
   bool backFace = dot(normal, nvP) > 0.0;
@@ -83,18 +84,18 @@ void main() {
 
   float mask = round(id);
   bool isWater      = CalculateMaskID(8.0, mask);
-  bool isGlass      = CalculateMaskID(20.0, mask);
-  bool isGlassPlane = CalculateMaskID(106.0, mask);
   bool isIce        = CalculateMaskID(79.0, mask);
   bool isEwww       = CalculateMaskID(165.0, mask);
 
-  /*
-  int blockID = int(round(id));
-  bool isWater      = blockID == 8;
-  bool isGlass      = blockID == 20;
-  bool isGlassPlane = blockID == 106;
-  bool isIce        = blockID == 79;
-  */
+  bool isGlass      = CalculateMaskID(20.0, mask);
+  bool isGlassPane = CalculateMaskID(106.0, mask);
+  bool isStainedGlass = CalculateMaskID(95.0, mask);
+  bool isStainedGlassPane = CalculateMaskID(160.0, mask);
+  bool AnyGlass = isGlass || isGlassPane || isStainedGlass || isStainedGlassPane;
+  bool AnyClearGlass = isGlass || isGlassPane;
+  bool AnyStainedGlass = isStainedGlass || isStainedGlassPane;
+  bool AnyGlassBlock = isGlass || isStainedGlass;
+  bool AnyGlassPane = isGlassPane || isStainedGlassPane;
 
   vec4 albedo = texture2D(texture, texcoord) * biomesColor;
 
@@ -123,10 +124,10 @@ void main() {
     blockDepth = min(255.0, length(vPSolidBlock - vP));
   }
 
-  if(isGlass || isGlassPlane){
+  if(AnyGlass){
     //if(albedo.a < 0.001) albedo.rgb = vec3(0.04);
     r = 1.52;
-    blockDepth = 0.125 + 0.875 * float(isGlass);
+    blockDepth = 0.125 + 0.875 * float(AnyGlassBlock);
 
     if(speculars.a - speculars.r < 0.0001)
     smoothness = 0.96 - 0.64 * max(0.0, albedo.a - 0.9) * 10.0;
@@ -149,7 +150,7 @@ void main() {
   vec3 surfaceReflectionVector = normalize(reflect(nvP, normalSurface));
 
   float alpha = albedo.a;
-  albedo.rgb = rgb2L(albedo.rgb);
+  albedo.rgb = L2Gamma(albedo.rgb);
 
   vec3 color = albedo.rgb * skyLightingColorRaw;
 
@@ -169,11 +170,13 @@ void main() {
   color.rgb += skySpecularReflection * sqrt(f * brdf);
   alpha = max(alpha, maxComponent(sqrt(brdf * f)));
 
-  //if(isWater && isEyeInWater == 1 || albedo.a > 0.99) alpha = 0.0;
+  if((isWater && isEyeInWater == 1) || (!isWater && albedo.a > 0.95)) alpha = 0.0;
 
   color /= overRange;
 
   normalVisible.xy = normalEncode(normalVisible);
+
+  albedo.rgb = G2Linear(albedo.rgb);
 
 /* DRAWBUFFERS:01235 */
   gl_FragData[0] = vec4(albedo.rgb, 1.0);

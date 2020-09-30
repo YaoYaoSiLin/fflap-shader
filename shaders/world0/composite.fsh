@@ -70,9 +70,9 @@ void main(){
 
   float mask = round(texture2D(composite, texcoord).z * 255.0);
   bool isWater      = CalculateMaskID(8.0, mask);
-  bool isGlass      = CalculateMaskID(20.0, mask);
-  bool isGlassPlane = CalculateMaskID(106.0, mask);
   bool isIce        = CalculateMaskID(79.0, mask);
+  bool isParticels = bool(step(249.5, mask) * step(mask, 250.5));
+  bool emissiveParticels = bool(step(250.5, mask) * step(mask, 252.5));
 
   vec4 image = texture2D(gaux2, texcoord);
        image.rgb *= overRange;
@@ -89,7 +89,7 @@ void main(){
 
   vec3 worldSunPosition = mat3(gbufferModelViewInverse) * normalize(sunPosition);
 
-  if(albedo.a > 0.01){
+  if(bool(albedo.a) && !isParticels && !emissiveParticels){
     vec3 color = albedo.rgb * skyLightingColorRaw;
 
     color = L2rgb(color);

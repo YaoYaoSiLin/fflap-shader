@@ -1,4 +1,4 @@
-#define TAA_Sharpen 50 //[0 5 10 15 20 25 30 35 40 45 50 55 60 65 70 75 80 85 90 95 100]
+#define TAA_Sharpen 70 //[0 5 10 15 20 25 30 35 40 45 50 55 60 65 70 75 80 85 90 95 100]
 
 #define Yuv 0
 #define YCoCg 1
@@ -272,7 +272,7 @@
     */
     //result = texture2D(tex, texPos1 * pixel);
 
-    #if 1
+    #if 0
       float weights = 0.0;
 
       for(float i = -1.0; i <= 1.0; i += 1.0){
@@ -298,7 +298,7 @@
     vec2 f2 = f * f;
     vec2 f3 = f * f2;
 
-    float c = 50.0  * 0.01;
+    float c = TAA_Sharpen  * 0.01;
     vec2 w0 =         -c  *  f3 + 2.0 * c          *  f2 - c  *  f;
     vec2 w1 =  (2.0 - c)  *  f3 - (3.0 - c)        *  f2            + 1.0;
     vec2 w2 = -(2.0 - c)  *  f3 + (3.0 - 2.0 * c)  *  f2 + c  *  f;
@@ -316,6 +316,7 @@
                   vec4(texture2D(tex, vec2(tc3.x, tc12.y)).rgb, 1.0) * (w3.x * w12.y) +
                   vec4(texture2D(tex, vec2(tc12.x, tc3.y)).rgb, 1.0) * (w12.x * w3.y);
     result /= result.a;
+    result.rgb = max(result.rgb, vec3(0.0));
     #endif
 
     result.rgb = encode(result.rgb);
@@ -330,7 +331,7 @@
     vec3 minColor = vec3(1.0);
     vec3 sharpen  = vec3(0.0);
 
-    vec3 closest = GetClosest(texcoord);
+    vec3 closest = GetClosest(unjittering);
 
     for(float i = -1.0; i <= 1.0; i += 1.0){
       for(float j = -1.0; j <= 1.0; j += 1.0){
@@ -368,7 +369,7 @@
     #define LowFreqWeight 0.8
     #define HighFreqWeight  0.95
 
-    vec3 weightA = vec3(0.05) * inScreenPrev;
+    vec3 weightA = vec3(0.95) * inScreenPrev;
     vec3 weightB = 1.0 - weightA;
 
     #define Static_Blend 0
@@ -391,11 +392,11 @@
     //weightA = 1.0 - weightB;
     #endif
 
-    vec3 antialiased = (currentColor * weightA + previousColor * weightB);
+    vec3 antialiased = (currentColor * weightB + previousColor * weightA);
 
     sharpen = clamp(currentColor - sharpen, vec3(-0.002), vec3(0.002));
     sharpen *= lerq(vec3(0.7071), vec3(sqrt(2.0)), maxComponent(blend));
-    antialiased += sharpen * inScreenPrev * TAA_Sharpen * 0.01;
+    //antialiased += sharpen * inScreenPrev * TAA_Sharpen * 0.01;
 
     return decode(antialiased);
   }

@@ -41,7 +41,17 @@ out vec4 color;
 
 #define GetBlockID(x, id) (step(id - 0.5, x) * step(x, id + 0.5) * id)
 
+vec4 opElongate( in vec3 p, in vec3 h )
+{
+    //return vec4( p-clamp(p,-h,h), 0.0 ); // faster, but produces zero in the interior elongated box
+
+    vec3 q = abs(p)-h;
+    return vec4( max(q,0.0), min(max(q.x,max(q.y,q.z)),0.0) );
+}
+
 void main() {
+  color = gl_Color;
+
 	float blockID = float(mc_Entity.x);
 
 	shadowPass = 0.0;
@@ -83,8 +93,6 @@ void main() {
 
 	texcoord = gl_MultiTexCoord0.xy;
 	lmcoord  = gl_MultiTexCoord1.xy;
-
-	color = gl_Color;
 
 	worldNormal = gl_Normal.xyz;
 
@@ -142,8 +150,15 @@ void main() {
 
 	//if(mc_Entity.x == 35) position.xyz += 10000;
 
+
 	position = gl_ProjectionMatrix * gl_ModelViewMatrix * position;
-	position.xy /= mix(1.0, length(position.xy), SHADOW_MAP_BIAS) / 0.95;
+
+	vec4 cylinder = opElongate(vec3(position.xy, 0.0), vec3(0.7071, 0.7071, 0.0));
+
+	float distortion = length(position.xy);
+	//position.xy /= mix(1.0, distortion, 0.7);
+	position.xy /= mix(1.0, distortion, SHADOW_MAP_BIAS) / 0.95;
+	//position.z *= 0.25;
 	//position.z /= max(1.0, far / shadowDistance);
 	//position.z = exp(128.0 * (position.z * 0.5 + 0.5)) / 3000.0;
 	//position.z = exp((position.z * 0.5 + 0.5) * 15.0) / exp(15.0) * 2.0 - 1.0;

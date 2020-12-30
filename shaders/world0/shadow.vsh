@@ -19,59 +19,47 @@ attribute vec4 mc_midTexCoord;
 
 uniform sampler2D noisetex;
 
+uniform mat4 shadowProjection;
+uniform mat4 shadowProjectionInverse;
+uniform mat4 shadowModelViewInverse;
+uniform mat4 gbufferProjection;
+uniform mat4 gbufferProjectionInverse;
+uniform mat4 gbufferModelView;
+uniform mat4 gbufferModelViewInverse;
+
+uniform vec3 cameraPosition;
+
 uniform float frameTimeCounter;
 uniform float far;
+uniform float near;
 
-uniform mat4 gbufferModelView;
+out vec4 worldPosition;
 
-out float shadowPass;
-out float isWater;
-out float isLava;
-out float blockDepth;
-
-out vec2 texcoord;
-out vec2 lmcoord;
-
-out vec3 worldNormal;
-out vec3 vP;
-
-out vec4 color;
+out float vertex_ID;
+out float vertexBlockID;
+out vec2 vertex_lmcoord;
+out vec2 vertex_texcoord;
+out vec3 vertex_normal;
+out vec4 vertex_color;
 
 #include "../libs/water.glsl"
 
 #define GetBlockID(x, id) (step(id - 0.5, x) * step(x, id + 0.5) * id)
 
-vec4 opElongate( in vec3 p, in vec3 h )
-{
-    //return vec4( p-clamp(p,-h,h), 0.0 ); // faster, but produces zero in the interior elongated box
-
-    vec3 q = abs(p)-h;
-    return vec4( max(q,0.0), min(max(q.x,max(q.y,q.z)),0.0) );
-}
+#define MaskID(id, E) (step(id - 0.5, E) * step(E, id + 0.5) * id)
+#define MaskIDBetween(id, id2, E) (step(id - 0.5, E) * step(E, id + 0.5) * id + step(id2 - 0.5, E) * step(E, id2 + 0.5) * id)
 
 void main() {
-  color = gl_Color;
+  vertex_ID = float(mc_Entity.x == 0.0);
+  vertex_lmcoord = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
+  vertex_texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
+  vertex_normal = gl_Normal.xyz;
+  vertex_color = gl_Color;
 
 	float blockID = float(mc_Entity.x);
-
-	shadowPass = 0.0;
-	isWater = 0.0;
-	isLava = GetBlockID(10.0, blockID);
-
-	blockDepth = 1.0;
-
-	if(mc_Entity.x == 95 || mc_Entity.x == 160 || mc_Entity.x == 79 || mc_Entity.x == 20 || mc_Entity.x == 165){
-		shadowPass = 1.0;
-	}
-
-	if(mc_Entity.x == 160 || mc_Entity.x == 106){
-		blockDepth = 0.125;
-	}
+  vertexBlockID = MaskID(blockID, 8.0) + MaskID(blockID, 20) + MaskID(blockID, 106) + MaskID(blockID, 95) + MaskID(blockID, 160);
 
 	if(mc_Entity.x == 8){
-		isWater = 1.0;
-		blockDepth = 0.0625;
-
 		#if Water_Color_Test > disable
 			#if Water_Color_Test == normal_biomes
 				color.rgb = vec3(0.247 , 0.4627, 0.8941);
@@ -88,13 +76,8 @@ void main() {
 			#endif
 		#endif
 
-		color = CalculateWaterColor(color);
+		vertex_color = CalculateWaterColor(vertex_color);
 	}
-
-	texcoord = gl_MultiTexCoord0.xy;
-	lmcoord  = gl_MultiTexCoord1.xy;
-
-	worldNormal = gl_Normal.xyz;
 
 	bool leaves = bool(step(1799.5, blockID) * step(blockID, 1805.5));
 
@@ -105,10 +88,6 @@ void main() {
   bool double_plant = double_plant_upper || double_plant_lower;
 
   //bool farm = mc_Entity.x == 59 || mc_Entity.x == 141 || mc_Entity.x == 142 || mc_Entity.x == 207;
-
-	vP = (gl_ModelViewMatrix * gl_Vertex).xyz;
-	//vP.xy /= (mix(1.0, length(vP.xy), SHADOW_MAP_BIAS) / 0.95);
-	//vP.z /= max(far / shadowDistance, 1.0);
 
 	vec4 position = gl_Vertex;
 
@@ -129,7 +108,6 @@ void main() {
     if(double_plant) wave *= 0.632;
 
     position.xz += wave;
-    //cutoutBlock = 1.0;
   }
 
   if(leaves) {
@@ -145,23 +123,13 @@ void main() {
     vec3 wave = vec3(sin(time + noise.x), sin(time + noise.y), sin(time + noise.z));
 
     position.xyz += wave * 0.021;
-    //cutoutBlock = 1.0;
   }
 
-	//if(mc_Entity.x == 35) position.xyz += 10000;
+  float angle = -0.25 * 2.0 * Pi;
+  mat2 rotate = mat2(cos(angle), sin(angle),-sin(angle), cos(angle));
 
+  position = gl_ModelViewMatrix * position;
 
-	position = gl_ProjectionMatrix * gl_ModelViewMatrix * position;
-
-	vec4 cylinder = opElongate(vec3(position.xy, 0.0), vec3(0.7071, 0.7071, 0.0));
-
-	float distortion = length(position.xy);
-	//position.xy /= mix(1.0, distortion, 0.7);
-	position.xy /= mix(1.0, distortion, SHADOW_MAP_BIAS) / 0.95;
-	//position.z *= 0.25;
-	//position.z /= max(1.0, far / shadowDistance);
-	//position.z = exp(128.0 * (position.z * 0.5 + 0.5)) / 3000.0;
-	//position.z = exp((position.z * 0.5 + 0.5) * 15.0) / exp(15.0) * 2.0 - 1.0;
-
-	gl_Position = position;
+  worldPosition = shadowModelViewInverse * position;
+  gl_Position = position;
 }

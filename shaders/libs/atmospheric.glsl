@@ -370,10 +370,23 @@ vec3 ApplyEarthSurface(in vec3 color, in vec3 e, in vec3 d, in vec3 l){
 	float tmax = max(t.x, t.y);
 	float tmin = max(min(t.x, t.y), 0.0);
 
-	vec3 earthSurfaceColor = Extinction(e.y - rE, tmin);
-			 earthSurfaceColor *= (skyLightingColorRaw) * maxComponent(sunLightingColorRaw) + sunLightingColorRaw * exp(-10000.0 / Hm);// * exp(-4000.0 / Hm) * max(0.0, RaySphereIntersection(vec3(0.0, rE + 1.0, 0.0), vec3(0.0, -0.01, 0.0), vec3(0.0), rE).x);
-			 //earthSurfaceColor *= Extinction(vec3(0.0), l) * invPi * 0.3;
-			 //earthSurfaceColor *= skyLightingColorRaw + sunLightingColorRaw;
+	float g = 0.76;
+	float g2 = g * g;
+
+	float mu = dot(d, l);
+	float opmu2 = 1. + mu*mu;
+
+	float phaseR = .0596831 * opmu2;
+	float phaseM = (0.25 / Pi) * ((1.0 - g2) / pow(1.0 + g2 - 2.0 * g * mu, 1.5));
+
+	vec3 earthSurfaceColor = vec3(0.0);
+
+	vec3 surfaceR = sunLightingColorRaw * (1.0 - exp(-tmin * bR * 10.0)) * phaseR;
+	vec3 surfaceM = sunLightingColorRaw * (1.0 - exp(-tmin * bM * 10.0)) * phaseM;
+
+	earthSurfaceColor = skyLightingColorRaw;
+	earthSurfaceColor *= Extinction(e.y - rE, tmin);
+	earthSurfaceColor += surfaceR + surfaceM;
 
 	return color + earthSurfaceColor * earth;
 }

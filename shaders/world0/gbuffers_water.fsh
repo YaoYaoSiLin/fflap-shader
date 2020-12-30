@@ -69,10 +69,23 @@ vec2 normalEncode(vec3 n) {
     return enc;
 }
 
+vec3 GetScatteringCoe(in vec4 albedo){
+  return pow2(albedo.a) * vec3(Pi);
+}
+
+vec3 GetAbsorptionCoe(in vec4 albedo){
+  return (1.0 - albedo.rgb) * pow3(albedo.a) * Pi;
+}
+
+/* DRAWBUFFERS:012345 */
+
 void main() {
-  if(texture2D(gaux1, screenCoord).a < gl_FragCoord.z && texture2D(gaux1, screenCoord).a > 0.0) discard;
+  //float lastLayerDepth = texture2D()
+
+  //if(texture2D(gaux1, screenCoord).x < gl_FragCoord.z + 0.00001 && texture2D(gaux1, screenCoord).x > 0.0) discard;
   //if(gl_FragCoord.z > texture2D(depthtex0, screenCoord).x) discard;
   //discard;
+
   float viewLength = length(vP);
   vec3 nvP = normalize(vP);
   bool backFace = dot(normal, nvP) > 0.0;
@@ -96,6 +109,13 @@ void main() {
   bool AnyStainedGlass = isStainedGlass || isStainedGlassPane;
   bool AnyGlassBlock = isGlass || isStainedGlass;
   bool AnyGlassPane = isGlassPane || isStainedGlassPane;
+
+  if(isWater && !gl_FrontFacing) discard;
+
+  if(!gl_FrontFacing) {
+    gl_FragData[4] = vec4(length(vP) / 544.0, normalEncode(normal), 1.0);
+    return;
+  }
 
   vec4 albedo = texture2D(texture, texcoord) * biomesColor;
 
@@ -121,7 +141,8 @@ void main() {
 
     smoothness = 0.99;
     metallic = 0.02;
-    blockDepth = min(255.0, length(vPSolidBlock - vP));
+    blockDepth = 4.0;
+    //blockDepth = min(255.0, length(vPSolidBlock - vP));
   }
 
   if(AnyGlass){
@@ -131,6 +152,8 @@ void main() {
 
     if(speculars.a - speculars.r < 0.0001)
     smoothness = 0.96 - 0.64 * max(0.0, albedo.a - 0.9) * 10.0;
+
+    metallic = 0.0425;
   }
 
   //blockDepth = min(length(vPSolidBlock - vP), blockDepth);
@@ -142,51 +165,89 @@ void main() {
        F0 = mix(F0, albedo.rgb, step(0.5, metallic));
 
   mat3 tbn = mat3(tangent, binormal, normal);
-  vec3 normalSurface = normalize(tbn * normalTexture);
-  if(backFace) normalSurface = -normalSurface;
-  vec3 normalVisible = normalSurface - (normalSurface - normal) * step(-0.15, dot(nvP, normalSurface));
 
-  vec3 reflectP = normalize(reflect(nvP, normalVisible));
-  vec3 surfaceReflectionVector = normalize(reflect(nvP, normalSurface));
+  vec3 texturedNormal = normalize(tbn * normalTexture);
+  vec3 flatNormal = normal * sign(float(backFace) - 0.5);
+  vec3 visibleNormal = flatNormal;
+  if(bool(step(dot(-nvP, visibleNormal), 0.2))) visibleNormal = flatNormal;
 
-  float alpha = albedo.a;
-  albedo.rgb = L2Gamma(albedo.rgb);
+  float backFaceNormal = -float(gl_FrontFacing);
 
-  vec3 color = albedo.rgb * skyLightingColorRaw;
+  texturedNormal *= backFaceNormal;
+  visibleNormal *= backFaceNormal;
+  flatNormal *= backFaceNormal;
+
+  vec3 L = normalize(reflect(nvP, visibleNormal));
+  vec3 rayDirection = mat3(gbufferModelViewInverse) * L;
+
+  float scatteringcoe = GetScatteringCoe(albedo).x;
+
+  float solidPart = step(0.9, albedo.a);
+  if(AnyGlass) scatteringcoe *= mix(0.1, 1.0, solidPart);
+
+  float alpha = 1.0 - exp(-scatteringcoe * blockDepth);
+        alpha = pow(alpha, 2.2);
+  //albedo.rgb = L2Gamma(albedo.rgb);
+
+  float skyVisiblity = saturate(lmcoord.y - 0.07) / 0.93;
+
+  vec3 color = L2Gamma(albedo.rgb) * (skyLightingColorRaw * pow3(skyVisiblity));
 
   //alpha = blockDepth * alpha * Pi;
   //alpha = 1.0 - min(1.0, exp(-alpha));
   //alpha = max(alpha, (albedo.a - 0.95) * 20.0);
-
-  color = L2rgb(color);
-
-  vec3 m = normalize(reflectP - nvP);
+  /*
+  vec3 m = normalize(L - nvP);
   float vdoth = pow5(1.0 - clamp01(dot(-nvP, m)));
-  vec3 f = F(F0, vdoth);
-  float brdf = min(1.0, CalculateBRDF(-nvP, reflectP, normalVisible, roughness));
+  vec3 f = F(L2Gamma(F0), vdoth);
+  float brdf = min(1.0, CalculateBRDF(-nvP, L, visibleNormal, roughness));
+  */
 
-  vec3 skySpecularReflection = L2rgb(CalculateSky(surfaceReflectionVector, worldSunPosition, 0.0, 1.0));
-  color.rgb *= 1.0 - brdf * mix(f, vec3(1.0), step(0.5, metallic));
-  color.rgb += skySpecularReflection * sqrt(f * brdf);
-  alpha = max(alpha, maxComponent(sqrt(brdf * f)));
+  roughness = 1.0 - roughness;
 
-  if((isWater && isEyeInWater == 1) || (!isWater && albedo.a > 0.95)) alpha = 0.0;
+  vec3 f = vec3(0.0);
+  float g = 0.0;
+  float d = 0.0;
+  FDG(f, g, d, L, -nvP, visibleNormal, L2Gamma(F0), roughness);
+  float brdf = saturate(g * d) * 0.95;
+
+  vec3 eyePosition = vec3(0.0, cameraPosition.y - 63.0, 0.0);
+  vec3 skySpecularReflection = CalculateInScattering(eyePosition, rayDirection, worldSunPosition, 0.76, ivec2(16, 2), vec3(1.0, 1.0, 0.0));
+       skySpecularReflection = ApplyEarthSurface(skySpecularReflection, eyePosition, rayDirection, worldSunPosition);
+       skySpecularReflection = (skySpecularReflection * pow3(skyVisiblity));
+
+  //color.rgb *= 1.0 - brdf * mix(f, vec3(1.0), step(0.5, metallic));
+
+  //color.rgb += skySpecularReflection * sqrt(f * brdf);
+  //alpha = max(alpha, maxComponent(sqrt(f * brdf)));
+
+  if((isWater && isEyeInWater == 1) || (isGlass && albedo.a > 0.95)) alpha = 0.0;
+
+  color = G2Linear(color);
+  alpha = pow(alpha, 1.0 / 2.2);
 
   color /= overRange;
 
-  normalVisible.xy = normalEncode(normalVisible);
+  //albedo.rgb = G2Linear(albedo.rgb);
 
-  albedo.rgb = G2Linear(albedo.rgb);
+  float selfShadow = 1.0;
+  float emissive = speculars.b;
+  vec4 lightmap = vec4(pack2x8(lmcoord), selfShadow, emissive, 1.0);
 
-/* DRAWBUFFERS:01235 */
+  float materials = mask / 255.0;
+
+  vec2 encodeNormal = normalEncode(visibleNormal);
+
+  float specularPackge = pack2x8(smoothness, metallic);
+
   gl_FragData[0] = vec4(albedo.rgb, 1.0);
-  gl_FragData[1] = vec4(lmcoord, id / 255.0, 1.0);
-  gl_FragData[2] = vec4(normalVisible.xy, smoothness, 1.0);
-  gl_FragData[3] = vec4(albedo.a, 0.0, metallic, 1.0);
-  gl_FragData[4] = vec4(color, alpha);
-  //gl_FragData[1] = vec4(torchLightMap / 15.0, skyLightMap, 0.0, 1.0);
-  //gl_FragData[2] = vec4(normalEncode(normalTexture), 1.0, 1.0);
-  //gl_FragData[3] = vec4(smoothness, metallic, id / 65535.0, 1.0);
-  //gl_FragData[4] = vec4(color / overRange, alpha);
-  //gl_FragData[5] = vec4(color, 1.0 - alpha);
+  gl_FragData[1] = lightmap;
+  gl_FragData[2] = vec4(albedo.a, 0.0, materials, 1.0);
+  gl_FragData[3] = vec4(encodeNormal, specularPackge, 1.0);
+  gl_FragData[5] = vec4(color, alpha);
+
+    //if(gl_FrontFacing)
+    //gl_FragData[5] = vec4(color, alpha);
+
+    //gl_FragData[4] = vec4(gl_FragCoord.z, 1.0, 0.0, float(!gl_FrontFacing));
 }

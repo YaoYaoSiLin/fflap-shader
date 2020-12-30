@@ -27,6 +27,8 @@ uniform vec3 shadowLightPosition;
 uniform vec3 sunPosition;
 uniform vec3 upPosition;
 
+uniform vec2 jitter;
+
 uniform float viewWidth;
 uniform float viewHeight;
 uniform float aspectRatio;
@@ -58,6 +60,7 @@ const int noiseTextureResolution = 64;
 #define CalculateHightLight 1
 
 #include "../libs/common.inc"
+#include "../lib/packing.glsl"
 #include "../libs/dither.glsl"
 #include "../libs/jittering.glsl"
 #include "../libs/brdf.glsl"
@@ -92,7 +95,7 @@ bool totalInternalReflection(in vec3 i, inout vec3 o, in vec3 n, in float eta){
   return bool(step(TIR, 0.0));
 }
 
-vec4 CalculateSunDirectLighting(in vec3 viewPosition, in vec3 normal, inout float sss){
+vec4 CalculateSunDirectLighting(in vec3 viewPosition, in vec3 normal){
     float viewLength = length(viewPosition);
     if(viewLength > shadowDistance) return vec4(1.0);
 
@@ -105,12 +108,12 @@ vec4 CalculateSunDirectLighting(in vec3 viewPosition, in vec3 normal, inout floa
     float distort = 1.0 / (mix(1.0, length(shadowPosition.xy), SHADOW_MAP_BIAS) / 0.95);
     vec3 shadowCoord = shadowPosition.xyz * vec3(vec2(distort), 1.0) * 0.5 + 0.5;
 
+    shadowCoord.xy *= 0.8;
+
     float d = texture(shadowtex1, shadowCoord.xy).x;
     float d0 = texture(shadowtex0, shadowCoord.xy).x;
 
     float shading = step(shadowCoord.z, d + shadowPixel * 2.0);
-
-    sss = 1.0 - clamp01(exp(d0 * 128.0) * exp(-shadowCoord.z * 128.0) - 0.0);
 
     return vec4(shading);
 }
@@ -254,11 +257,13 @@ vec4 CalculateRayMarchingScattering(in vec4 rayOrigin, in vec4 rayIn, in float d
 }
 
 vec3 GetScatteringCoe(in vec4 albedo){
-  return pow2(albedo.a) * vec3(Pi);
+  return pow2(albedo.a) * vec3(Pi) * 2.0;
 }
 
 vec3 GetAbsorptionCoe(in vec4 albedo){
-  return (1.0 - albedo.rgb) * pow3(albedo.a) * Pi;
+  if(bool(step(0.95, albedo.a))) return vec3(0.0);
+
+  return (1.0 - albedo.rgb) * pow5(albedo.a) * 10.47 / (length(albedo.rgb + 0.005));
 }
 
 void ApplyWaterScattering(inout vec3 color, in vec3 Ts, in vec3 Ta, vec3 lightingColor, in vec3 albedo, in float s){
@@ -280,9 +285,10 @@ void ApplyWaterScattering(inout vec3 color, in vec3 Ts, in vec3 Ta, vec3 lightin
   //exp(-(Ta + Ts) * (15.0 - eyeSkyLight) * 30.0) *
 
   vec3 scattering = 1.0 - exp(-Ts * s * albedo);
-       scattering *= limitDistance * exp(-(Ta + Ts) * limitDistance);
+  //     scattering *= limitDistance * exp(-(Ta + Ts) * limitDistance);
 
-  color += scattering * lightingColor * Ts * albedo;
+  //color += scattering * lightingColor * Ts * albedo;
+  color += scattering * lightingColor * albedo * min(vec3(1.0), Ts);
 
   //color += scattering * (1.0 - exp(-(Ts * albedo.rgb) * 1.0)) * limitDistance * exp(-Te * limitDistance) * 6.0;
 
@@ -294,18 +300,17 @@ void ApplyWaterScattering(inout vec3 color, in vec3 Ts, in vec3 Ta, vec3 lightin
   //color += scattering * lightingColor;
 }
 
-vec3 CalculateTranslucent(in vec3 rayOrigin, in vec3 normal, in float rayMax, in vec4 albedo, in float IOR, inout vec2 coord, inout bool TIR){
+vec3 CalculateTranslucent(in vec3 rayOrigin, in vec3 normal, in float rayMax, in vec4 albedo, in float materials, in float IOR, inout vec2 coord, inout bool TIR){
   float dither = GetBlueNoise(depthtex2, texcoord, resolution.y, jittering);
 
-  float mask = round(texture2D(gdepth, texcoord).z * 255.0);
-  bool isSky = bool(step(254.5, mask));
-  bool isWater = CalculateMaskID(8, mask);
-  bool isIce = CalculateMaskID(79, mask);
+  bool isSky = bool(step(254.5, materials));
+  bool isWater = CalculateMaskID(8, materials);
+  bool isIce = CalculateMaskID(79, materials);
 
-  bool isGlass      = CalculateMaskID(20.0, mask);
-  bool isGlassPane = CalculateMaskID(106.0, mask);
-  bool isStainedGlass = CalculateMaskID(95.0, mask);
-  bool isStainedGlassPane = CalculateMaskID(160.0, mask);
+  bool isGlass      = CalculateMaskID(20.0, materials);
+  bool isGlassPane = CalculateMaskID(106.0, materials);
+  bool isStainedGlass = CalculateMaskID(95.0, materials);
+  bool isStainedGlassPane = CalculateMaskID(160.0, materials);
   bool AnyGlass = isGlass || isGlassPane || isStainedGlass || isStainedGlassPane;
   bool AnyClearGlass = isGlass || isGlassPane;
   bool AnyStainedGlass = isStainedGlass || isStainedGlassPane;
@@ -332,12 +337,27 @@ vec3 CalculateTranslucent(in vec3 rayOrigin, in vec3 normal, in float rayMax, in
   //float eta = 1.333;
   //if(isEyeInWater == 0) eta = 1.000293 / IOR;
 
+  vec3 frontPosition = nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, texture(depthtex0, texcoord).x) * 2.0 - 1.0));
+  vec3 solidPosition = nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, texture(depthtex1, texcoord).x) * 2.0 - 1.0));
+  float backFaceLength = texture(gaux1, texcoord).x * 544.0;
+
+  float hL = length(frontPosition - solidPosition);
+  float bL = abs(length(frontPosition) - backFaceLength);
+  float d = min(hL, bL);
+
   vec3 refractDirection = vec3(0.0);
   TIR = totalInternalReflection(rayDirection, refractDirection, normal, eta);
-  refractDirection *= min(1.0, blockDepth + float(isEyeInWater));
+  refractDirection *= min(100.0 - 99.0 * float(isWater), d);
+
+  vec3 secRefraction = vec3(0.0);//normalize(refract(rayDirection, normal, eta));
+  bool TIRout = totalInternalReflection(rayDirection, secRefraction, normalDecode(texture2D(gaux1, texcoord).xy), eta2 / eta1);
+
+  if(TIRout)
+  refractDirection += secRefraction * max(0.0, hL - bL - 0.05);
 
   vec2 refracted = nvec3(gbufferProjection * nvec4(rayOrigin.xyz + refractDirection)).xy * 0.5 + 0.5;
   if(bool(step(texture2D(gcolor, refracted).a, 0.99))) refracted = texcoord;
+  //refracted = texcoord;
   coord = refracted;
 
   vec3 rP = nvec3(gbufferProjectionInverse * nvec4(vec3(refracted, texture(depthtex0, refracted).x) * 2.0 - 1.0));
@@ -345,11 +365,21 @@ vec3 CalculateTranslucent(in vec3 rayOrigin, in vec3 normal, in float rayMax, in
 
   //blockDepth = max(min(rayMax, length(rPO - rP)), blockDepth * step(texture2D(gcolor, refracted).a, 0.99));
   //if(!bool(step(texture2D(gcolor, refracted).a, 0.99))) blockDepth = min(rayMax, length(rPO - rP));
-  blockDepth = length(rP - rPO) + albedo.a * albedo.a;
-  blockDepth = min(blockDepth, rayMax + max(0.0, 1.0 - rayMax) * albedo.a);
+  //blockDepth = length(rP - rPO) + albedo.a * albedo.a;
+  //blockDepth = min(blockDepth, rayMax + max(0.0, 1.0 - rayMax) * albedo.a);
 
-  vec3 color = texture2D(gaux2, refracted).rgb * overRange;
+
+  //vec3 backPosition  = nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, texture(gaux1, texcoord).x) * 2.0 - 1.0));
+
+  blockDepth = min(length(rP - rPO), bL + 1000.0 * float(isWater)) + albedo.a * albedo.a;
+
+  vec3 color = decodeGamma(texture2D(gaux2, refracted).rgb) * decodeHDR;
   if(TIR) color = vec3(0.0);
+
+  //color = vec3(step(10.0, max(0.0, hL - bL - 0.05)));
+
+  //color = L2Gamma(color);
+
   //color = vec3(1.0);
   /*
   vec3 scatteringcoe = vec3(pow3(albedo.a) * Pi * 4.0);
@@ -389,28 +419,29 @@ vec3 CalculateTranslucent(in vec3 rayOrigin, in vec3 normal, in float rayMax, in
   color += lightingColor * simpleScatering * scatteringExtinction;
   */
 
-  float sss = (1.0);
-  vec4 shading = CalculateSunDirectLighting(rayOrigin, normal, sss);
+  //float sss = (1.0);
+  //vec4 shading = CalculateSunDirectLighting(rayOrigin, normal, sss);
+
+  //color = L2Gamma(color);
 
   vec3 Ts = GetScatteringCoe(albedo);
   vec3 Ta = GetAbsorptionCoe(albedo);
 
+  //albedo.rgb = L2Gamma(albedo.rgb);
+
   float solidPart = step(0.9, albedo.a);
 
   if(AnyGlass){
-    Ts *= mix(0.1, 1.0, solidPart);
-    Ta *= mix(1.0, 0.0, solidPart);
+    Ts *= mix(0.159, 1.0, solidPart);
+    //Ta *= mix(0.333 / sum3(albedo.rgb), 0.0, solidPart);
   }
 
   if(!AnyGlass && !isWater) {
     Ta *= 0.01;
   }
 
-  vec3 extinctioncoe = Ts + Ta;
+  //albedo.rgb = L2Gamma(albedo.rgb);
 
-  vec3 extinction = exp(-extinctioncoe * blockDepth);
-
-  vec3 scattering = 1.0 - exp(-Ts * blockDepth * albedo.rgb);
   //if(isWater) scattering *= exp(-extinctioncoe * min(exp(extinctioncoe), vec3(blockDepth))) * normalize(albedo.rgb);
   //if(isWater)
   //scattering *= min(normalize(albedo.rgb), max(vec3(0.001), extinction) * blockDepth * Ts * 200.0);
@@ -421,19 +452,18 @@ vec3 CalculateTranslucent(in vec3 rayOrigin, in vec3 normal, in float rayMax, in
   //scattering *= Ts * min(vec3(blockDepth), vec3(exp(Ts))) * 1.0 * max(extinction, exp(-Ts));
   //if(isWater) scattering *= 5.0;
 
-  vec3 limitDistance = min(vec3(blockDepth), exp((Ta + Ts)));
-
-  scattering *= Ts * albedo.rgb * limitDistance * exp(-(Ta + Ts) * limitDistance) * 6.0;
-
   if((bool(isEyeInWater) && !isWater) || (!bool(isEyeInWater))){
     //color *= extinction;
     //color += scattering * (G2Linear(skyLightingColorRaw));
 
-    vec3 lightingColor = G2Linear(skyLightingColorRaw);
-         lightingColor = normalize(lightingColor) * 0.5;
-    if(isWater) lightingColor = vec3(dot03(lightingColor));
+    vec3 lightingColor = (skyLightingColorRaw);
+    //     lightingColor = normalize(lightingColor) * 0.5;
+    //if(isWater) lightingColor = vec3(dot03(lightingColor));
+    //color = L2Gamma(color);
+    //albedo.rgb = L2Gamma(albedo.rgb);
 
     ApplyWaterScattering(color, Ts, Ta, lightingColor, albedo.rgb, blockDepth);
+    //color = G2Linear(color);
 
 
     //CalculateSunLightingScattering
@@ -444,6 +474,9 @@ vec3 CalculateTranslucent(in vec3 rayOrigin, in vec3 normal, in float rayMax, in
     //color += (p1, p0, dither, Ta, Ts, albedo.rgb, sqrt(rayMax * 2.0)).rgb;
     //color += scattering * G2Linear(sunLightingColorRaw * fading) * HG(dot(rayDirection, normalize(shadowLightPosition)), 0.2) * shading.rgb;
   }
+
+  //color = G2Linear(color);
+
   //color *= min(vec3(1.0), absorption);
 
   //color *= max(normalize(albedo.rgb), absorption);
@@ -476,10 +509,13 @@ vec3 CalculateTranslucent(in vec3 rayOrigin, in vec3 normal, in float rayMax, in
     color -= color * (1.0 - exp(-(albedo.a * blockDepth + albedo.a * 0.5) * Pi)) * exp(-albedo.rgb);
   }
   */
+    /*
+  vec2 specularPackge = unpack2x8(texture(composite, texcoord).b);
 
-  float smoothness = texture(gnormal, texcoord).b;
-  float metallic = texture(composite, texcoord).b;
+  float smoothness = specularPackge.r;
+  float metallic = specularPackge.g;
   float roughness = pow2(1.0 - smoothness);
+
   vec3 F0 = vec3(max(0.02, metallic));
        F0 = mix(F0, albedo.rgb, step(0.5, metallic));
 
@@ -505,7 +541,7 @@ vec3 CalculateTranslucent(in vec3 rayOrigin, in vec3 normal, in float rayMax, in
   color += sunLighting * sunLightingColorRaw * shading.rgb * fading;
 
   color = G2Linear(color);
-
+*/
   vec3 lightingDirection = normalize(shadowLightPosition);
   float lightViewSpaceVisible = step(dot(normal, lightingDirection), 0.0) * 2.0 - 1.0;
   vec3 lightViewNormal = normal * lightViewSpaceVisible;
@@ -585,46 +621,248 @@ vec2 normalEncode(vec3 n) {
     return enc;
 }
 
+void CalculateParticleNormal(inout vec3 result){
+  vec3 facingToPlayer = nvec3(gbufferProjectionInverse * nvec4(vec3(0.5, 0.5, 0.8) * 2.0 - 1.0));
+  result = normalize(-facingToPlayer);
+}
+
+vec2 unpackUnorm2x4(in uint v){
+  uvec2 x = (uvec2(v) >> uvec2(0, 4)) & uvec2(0xf);
+  return vec2(x) / 15.0;
+}
+#if 0 
+vec3 CalculateSubSurfaceLighting(in vec3 albedo, in vec3 viewPosition, in float metallic){
+  vec4 worldPosition = gbufferModelViewInverse * nvec4(viewPosition);
+
+  vec4 shadowCoord = shadowProjection * shadowModelView * worldPosition; shadowCoord /= shadowCoord.w;
+  //     shadowCoord.xy /= mix(1.0, length(shadowCoord.xy), SHADOW_MAP_BIAS) / 0.95;
+       shadowCoord = shadowCoord * 0.5 + 0.5;
+  //     shadowCoord.xy *= 0.8;
+       //shadowCoord.z -= (2.0 / 2048.0);
+
+  float radius = 2.0;
+
+  //float d = 0.0;
+  
+  vec3 L = normalize(shadowLightPosition);
+  vec3 V = normalize(-viewPosition);
+  vec3 N = normalDecode(texture2D(composite, texcoord).xy);
+
+  float ndotv = dot(V, N);
+  float ndotl = dot(L, N);
+  /*
+  vec3 f = F(vec3(0.02), V, N * sign(dot(V, N)));
+  */
+  vec3 F0 = mix(vec3(max(metallic, 0.02)), albedo, metallic);
+  
+  vec3 fout = F(F0, V, N * sign(ndotv));
+
+  vec3 Lo = vec3(0.0);
+
+  int count = 0;
+  
+  vec2 dither = vec2(GetBlueNoise(depthtex2, texcoord, resolution.y, jitter) ,
+                     GetBlueNoise(depthtex2, 1.0 - texcoord, resolution.y, jitter));
+
+  //if(bool(step(0.0, ndotl))) return vec3(0.0);
+
+  
+
+  vec4 start = gbufferModelViewInverse * nvec4(viewPosition);
+
+  float stepLength = 0.125;
+
+  vec3 direction = normalize(start.xyz) * stepLength;
+
+  vec4 position = start + vec4(direction * dither.x, 0.0);
+
+  vec3 shadowMapCoord = wP2sP(start);
+
+  for(int i = 0; i < 8; i++){
+    position.xyz -= direction;
+
+    //if(length(position.xyz) <= stepLength) break;
+
+    //if(length(position.xyz) > length(start.xyz)) break;
+
+    vec3 coord = wP2sP(position);
+    if(coord.x > 0.8 || coord.y > 0.8) continue;
+
+    //Lo += pow(decodeGamma(texture2D(shadowcolor0, coord.xy).rgb), vec3(4.0)) * 0.1 * 0.125;//
+    //Lo += 0.125 * step(coord.z, texture(shadowtex0, coord.xy).x + 0.0001);// * decodeGamma(texture2D(shadowcolor0, coord.xy).rgb);
+
+    float depth = texture(shadowtex0, coord.xy).x;
+    //if(depth > shadowMapCoord.z) continue;
+
+    float visibility = step(coord.z, depth + 0.0001);
+
+    vec3 normal = mat3(gbufferModelView) * (texture2D(shadowcolor1, coord.xy).rgb * 2.0 - 1.0);
+
+    float cosTheta = saturate(dot(normal, L));
+
+    vec3 fin = F(F0, L, normal);
+
+    //float d = length(position.xyz)
+
+    vec3 Lin = nvec3(shadowProjectionInverse * nvec4(vec3(coord.xy, depth) * 2.0 - 1.0));
+    vec3 Lout = nvec3(shadowProjectionInverse * nvec4(vec3(coord.xyz) * 2.0 - 1.0));
+
+    float translucentLength = length(Lout) - length(Lin);
+    if(translucentLength < 1e-5 || translucentLength > 1.0) break;
+
+    float leng = exp(-(translucentLength) * 100.0);
+
+    float diff = coord.z - depth;
+
+    Lo += fin / (translucentLength * 5.0);
+    //Lo += step(diff, 0.0) * step(-0.005, diff);
+    //Lo += fin * cosTheta * step(leng, 1.0) * 0.125 * (1.0 - visibility);//fin * cosTheta 
+  }
+  
+  //Lo = fout;
+
+  Lo *= 0.125;
+  Lo *= fout * invPi * albedo.rgb * 1000.0 * fading * sunLightingColorRaw;
+
+  //Lo = length(-L - V) * vec3(0.01);
+
+  /*
+  for(float i = -radius; i <= radius; i += 1.0){
+    for(float j = -radius; j <= radius; j += 1.0){
+      vec2 direction = vec2(i, j);
+           direction = RotateDirection(direction, dither);
+
+      vec2 coord = shadowCoord.xy + direction * (1.0 / 2048.0);
+           coord = coord * 2.0 - 1.0;
+           coord /= mix(1.0, length(coord), SHADOW_MAP_BIAS) / 0.95;
+           coord = coord * 0.5 + 0.5;
+           coord *= 0.8;
+
+      //vec3 normal = mat3(gbufferModelView) * (texture2D(shadowcolor1, coord).rgb * 2.0 - 1.0);
+
+      d += step(shadowCoord.z, texture(shadowtex0, coord).x);
+    }
+  }
+  */
+      /*
+  d /= pow2(radius * 2.0 + 1.0);
+
+
+  float diff = shadowCoord.z - texture(shadowtex0, coord).x;
+
+  Lo = vec3(1.0) * step(diff, 0.0) * step(-0.0005, diff);
+  */
+  /*
+  vec3 fin = F(F0, L, -N * sign(-ndotl));
+
+  vec2 coord = shadowCoord.xy * 2.0 - 1.0;
+  coord /= mix(1.0, length(coord), SHADOW_MAP_BIAS) / 0.95;
+  coord = coord * 0.5 + 0.5;
+  coord *= 0.8;
+
+  vec2 direction = normalize(mat3(gbufferModelViewInverse) * shadowLightPosition).xy;
+
+  float d = 0.0;
+
+  shadowCoord.z -= length(direction) * shadowPixel + shadowPixel / max(0.01, abs(ndotl));
+  d += GetShadow(shadowtex0, vec3(coord + direction * shadowPixel, shadowCoord.z));
+
+  shadowCoord.z -= length(direction) * shadowPixel * 2.0;
+  d += GetShadow(shadowtex0, vec3(coord + direction * shadowPixel * 3.0, shadowCoord.z));
+
+  shadowCoord.z -= length(direction) * shadowPixel * 2.0;
+  d += GetShadow(shadowtex0, vec3(coord + direction * shadowPixel * 5.0, shadowCoord.z));
+
+  shadowCoord.z -= length(direction) * shadowPixel * 2.0;
+  d += GetShadow(shadowtex0, vec3(coord + direction * shadowPixel * 7.0, shadowCoord.z));
+
+  shadowCoord.z -= length(direction) * shadowPixel * 2.0;
+  d += GetShadow(shadowtex0, vec3(coord + direction * shadowPixel * 9.0, shadowCoord.z));
+
+  shadowCoord.z -= length(direction) * shadowPixel * 2.0;
+  d += GetShadow(shadowtex0, vec3(coord + direction * shadowPixel * 11.0, shadowCoord.z));
+
+  d /= 7.0;
+  d = 1.0 - d;
+*/
+  /*
+  float d = shadowGatherOffset(shadowtex0, vec3(coord, shadowCoord.z), vec2(1.0, 1.0))
+          + shadowGatherOffset(shadowtex0, vec3(coord, shadowCoord.z), vec2(1.0, -1.0))
+          + shadowGatherOffset(shadowtex0, vec3(coord, shadowCoord.z), vec2(-1.0, -1.0))
+          + shadowGatherOffset(shadowtex0, vec3(coord, shadowCoord.z), vec2(-1.0, 1.0));
+        d *= 0.25;
+        d = 1.0 - d;
+        d *= 1.0;
+        */
+
+  //vec3 half = -L - V;
+
+  //Lo = invPi * fin * fout / (d * 30.0) * albedo.rgb * 10.0 * pow5(1.0 - d);//invPi * albedo.rgb / sqrt(dot(half, half) + pow2(d));
+  //Lo = 1.0 / vec3(d * 30.0) * pow5(1.0 - d);
+
+  /*
+  vec3 Ni = N * sign(ndotl);//mat3(gbufferModelView) * (texture2D(shadowcolor1, coord).rgb * 2.0 - 1.0);
+  vec3 fi = F(F0, L, Ni);
+
+  Lo = fi * fo * (d) * albedo.rgb * sunLightingColorRaw * saturate(dot(L, Ni)) * 100.0;
+  Lo *= 1.0 - metallic;
+
+  Lo *= invPi;
+  */
+
+  return Lo;
+}
+#endif
 void main(){
   vec4 color = texture2D(gaux2, texcoord);
-       color.rgb *= overRange;
+       color.rgb = decodeGamma(color.rgb) * decodeHDR;
 
-  float alpha = texture2D(composite, texcoord).x;
+  float alpha = texture2D(gnormal, texcoord).x;
   vec4 albedo = texture2D(gcolor, texcoord);
+       albedo.rgb = decodeGamma(albedo.rgb);
 
   float depth = texture(depthtex0, texcoord).x;
   vec3 viewPosition = nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, depth) * 2.0 - 1.0));
   vec3 worldPosition = mat3(gbufferModelViewInverse) * viewPosition;
 
+  vec3 nvP = normalize(viewPosition);
+
   float viewLength = length(viewPosition);
 
-  vec3 normal = normalDecode(texture2D(gnormal, texcoord).xy);
-  vec3 normalSurface = normalDecode(texture2D(composite, texcoord).xy);
+  vec3 flatNormal = normalDecode(texture2D(gnormal, texcoord).xy);
+  vec3 texturedNormal = normalDecode(texture2D(composite, texcoord).xy);
+  vec3 visibleNormal = texturedNormal;
+  if(bool(albedo.a))flatNormal = texturedNormal;
+  if(!bool(albedo.a) && dot(-normalize(viewPosition), visibleNormal) < 0.2) visibleNormal = flatNormal;
 
-  vec3 normalVisible = normal;
-  if(!bool(albedo.a) && dot(normalSurface, normalize(viewPosition)) < 0.1) normalVisible = normalSurface;
-
-  float mask = round(texture2D(gdepth, texcoord).z * 255.0);
-  bool isSky = bool(step(254.5, mask));
-  bool isWater = CalculateMaskID(8, mask);
-  bool isParticels = bool(step(249.5, mask) * step(mask, 250.5));
-  bool emissiveParticels = bool(step(250.5, mask) * step(mask, 252.5));
-  bool isGlass      = CalculateMaskID(20.0, mask);
-  bool isGlassPane = CalculateMaskID(106.0, mask);
-  bool isStainedGlass = CalculateMaskID(95.0, mask);
-  bool isStainedGlassPane = CalculateMaskID(160.0, mask);
+  float materials = round(texture(gnormal, texcoord).b * 255.0);
+  bool isSky = bool(step(254.5, materials));
+  bool isWater = CalculateMaskID(8, materials);
+  bool isParticels = bool(step(249.5, materials) * step(materials, 250.5));
+  bool emissiveParticels = bool(step(250.5, materials) * step(materials, 252.5));
+  bool isIce      = CalculateMaskID(79.0, materials);
+  bool isGlass      = CalculateMaskID(20.0, materials);
+  bool isGlassPane = CalculateMaskID(106.0, materials);
+  bool isStainedGlass = CalculateMaskID(95.0, materials);
+  bool isStainedGlassPane = CalculateMaskID(160.0, materials);
   bool AnyGlass = isGlass || isGlassPane || isStainedGlass || isStainedGlassPane;
+  bool isLeaves = CalculateMaskID(18.0, materials);
+  bool isGrass = CalculateMaskID(31.0, materials);
 
-  float smoothness = texture(gnormal, texcoord).b;
-  float metallic = texture(composite, texcoord).b;
+  vec2 specularPackge = unpack2x8(texture(composite, texcoord).b);
+  float smoothness = specularPackge.r;
+  float metallic = specularPackge.g;
+  float roughness = pow2(1.0 - smoothness);
 
   vec3 F0 = vec3(max(0.02, metallic));
        F0 = mix(F0, albedo.rgb, step(0.5, metallic));
 
   vec3 torchLightingColor = vec3(1.049, 0.5821, 0.0955);
 
-  float torchLightMap = texture(gdepth, texcoord).x;
-  float skyLightMap = texture(gdepth, texcoord).y;
+  vec2 lightmapPackge = unpack2x8(texture(gdepth, texcoord).x);
+  float torchLightMap = lightmapPackge.x;
+  float skyLightMap = lightmapPackge.y;
+  float emissive = texture(gdepth, texcoord).b;
 
   float blockDepth = 1.0;
   if(isWater) blockDepth = 255.0;
@@ -633,12 +871,182 @@ void main(){
   vec2 coord = texcoord;
   bool TIR = false;
 
-  if(bool(albedo.a)){
-    float IOR = 1.333;
-    if(isGlass || isGlassPane) IOR = 1.5;
-
-    color.rgb = CalculateTranslucent(viewPosition, normal, blockDepth, vec4(albedo.rgb, alpha), IOR, coord, TIR);
+  if(isParticels || emissiveParticels){
+    CalculateParticleNormal(texturedNormal);
+    CalculateParticleNormal(visibleNormal);
+    CalculateParticleNormal(flatNormal);
   }
+
+  //float IOR = 1.333;
+  //if(isGlass || isGlassPane) IOR = 1.5;
+
+  //float n1 = 1.0;
+  //float n2 = 1.333;
+  //float f0 = pow2((n1 - n2) / (n1 + n2));
+
+  float IOR = 1.0 / ((2.0 / (sqrt(0.04) + 1.0)) - 1.0);
+
+  if(bool(albedo.a)){
+      if(!emissiveParticels) color.rgb = CalculateTranslucent(viewPosition, texturedNormal, blockDepth, vec4(albedo.rgb, alpha), materials, IOR, coord, TIR);
+      else{
+        //todo translucnet particles
+        vec3 particlesColor = albedo.rgb * skyLightingColorRaw * pow3(max(0.0, skyLightMap - 0.07) / 0.93);
+
+        float particlesAlpha = albedo.a;
+              particlesAlpha *= step(texture(depthtex0, texcoord).x, texture(depthtex1, texcoord).x);
+
+        //color.rgb = mix(color.rgb, particlesColor, particlesAlpha);
+      }
+
+    vec3 L = normalize(shadowLightPosition);
+    vec3 V = -normalize(viewPosition);
+
+    vec3 h = normalize(L + V);
+
+    vec3 f = F(F0, L, h);
+    vec3 kS = f;
+    vec3 kD = (1.0 - f) * (1.0 - metallic);
+
+    vec4 shading = CalculateSunDirectLighting(viewPosition, flatNormal);
+
+    vec3 sunDirectLight = SpecularLight(albedo.rgb, normalize(shadowLightPosition), -nvP, visibleNormal, texturedNormal, F0, roughness, metallic);
+    if(bool(step(0.95, alpha))) sunDirectLight += DiffuseLight(albedo.rgb, normalize(shadowLightPosition), -nvP, visibleNormal, texturedNormal, F0, roughness, metallic);
+
+    color.rgb += shading.rgb * sunDirectLight * sunLightingColorRaw * fading;
+  }
+
+  //if(bool(albedo.a) || isLeaves || isGrass)
+  //color.rgb += CalculateSubSurfaceLighting(albedo.rgb, viewPosition, metallic);
+  /*
+  #if MC_VERSION > 11499
+    if(bool(albedo.a)){
+      if(!emissiveParticels) color.rgb = CalculateTranslucent(viewPosition, texturedNormal, blockDepth, vec4(albedo.rgb, alpha), materials, IOR, coord, TIR);
+      else{
+        //todo translucnet particles
+        vec3 particlesColor = L2Gamma(albedo.rgb) * skyLightingColorRaw * pow3(max(0.0, skyLightMap - 0.07) / 0.93);
+             particlesColor = G2Linear(particlesColor);
+
+        float particlesAlpha = albedo.a;
+              particlesAlpha *= step(texture(depthtex0, texcoord).x, texture(depthtex1, texcoord).x);
+
+        color.rgb = mix(color.rgb, particlesColor, particlesAlpha);
+      }
+
+      color.rgb = decodeGamma(color.rgb);
+
+      float noDiffuse = max(1.0 - step(0.99, alpha), metallic);
+      if(isIce) noDiffuse = smoothness;
+
+      vec3 rayDirection = -normalize(viewPosition);
+      vec3 L = normalize(reflect(normalize(viewPosition), visibleNormal));
+
+      float g,d;
+      vec3 f;
+      FDG(f, d, g, rayDirection, L, visibleNormal, (F0), roughness);
+      float brdf = saturate(g * d);
+
+      color.rgb *= (1.0 - brdf * max(f, vec3(metallic)));
+
+      
+      //float sss = (1.0);
+      vec4 shading = CalculateSunDirectLighting(viewPosition, flatNormal, sss);
+      //vec3 sunLighting = BRDFLighting(decodeGamma(albedo.rgb), normalize(shadowLightPosition), rayDirection, visibleNormal, texturedNormal, (F0), roughness, noDiffuse);
+      //color.rgb += sunLighting * sunLightingColorRaw * shading.rgb * fading;
+
+      color.rgb *= 1.0 - emissive;
+      color.rgb += emissive * decodeGamma(albedo.rgb) * 4.56;
+
+      color.rgb = encodeGamma(color.rgb);
+    }
+  #endif
+
+  #if MC_VERSION < 11499
+    if(bool(albedo.a)) {
+      color.rgb = CalculateTranslucent(viewPosition, texturedNormal, blockDepth, vec4(albedo.rgb, alpha), materials, IOR, coord, TIR);
+
+      color.rgb = decodeGamma(color.rgb);
+
+      float noDiffuse = max(1.0 - step(0.99, alpha), metallic);
+      if(isIce) noDiffuse = smoothness;
+
+      vec3 rayDirection = -normalize(viewPosition);
+      vec3 L = normalize(reflect(normalize(viewPosition), visibleNormal));
+
+      float g,d;
+      vec3 f;
+      FDG(f, d, g, rayDirection, L, visibleNormal, (F0), roughness);
+      float brdf = saturate(g * d);
+
+      color.rgb *= (1.0 - brdf * max(f, vec3(metallic)));
+
+      float sss = (1.0);
+      vec4 shading = CalculateSunDirectLighting(viewPosition, flatNormal, sss);
+      vec3 sunLighting = BRDFLighting(decodeGamma(albedo.rgb), normalize(shadowLightPosition), rayDirection, visibleNormal, texturedNormal, (F0), roughness, noDiffuse);
+      color.rgb += sunLighting * sunLightingColorRaw * shading.rgb * fading;
+
+      color.rgb *= 1.0 - emissive;
+      color.rgb += emissive * decodeGamma(albedo.rgb) * 4.56;
+
+      color.rgb = encodeGamma(color.rgb);
+    }
+  #endif
+  */
+  vec2 density = vec2(exp(-1.0 / Hr), exp(-1.0 / Hm));
+
+  vec3 Tr = bR * 1.0;
+  vec3 Tm = bM * 1.0;
+
+  //color.rgb = L2Gamma(color.rgb);
+  //color.rgb = decodeGamma(color.rgb);
+
+  if(!isSky){
+    float mu = dot(nvP, normalize(shadowLightPosition));
+    float phaseR = 0.0596831 * (1.0 + mu * mu);
+    float phaseM = HG(mu, 0.76);
+
+    vec3 extinction = exp(-(Tr + Tm) * viewLength);
+    vec3 r = (1.0 - exp(-(Tr) * viewLength)) * phaseR;
+    vec3 m = (1.0 - exp(-Tm * viewLength)) * phaseM;
+
+    color.rgb *= extinction;
+    color.rgb += r * sunLightingColorRaw;
+    color.rgb += m * sunLightingColorRaw;
+  }
+
+  if(isEyeInWater == 1){
+    vec4 biomeWaterColor = eyesWaterColor;
+
+    vec3 Ta = GetAbsorptionCoe(biomeWaterColor);
+    vec3 Ts = GetScatteringCoe(biomeWaterColor);
+
+    biomeWaterColor.rgb = decodeGamma(biomeWaterColor.rgb);
+
+    //if(TIR) ApplyWaterScattering(color.rgb, Ts, Ta, sunLightingColorRaw, biomeWaterColor.rgb, 1000.0);
+
+    float sDistnce = viewLength + biomeWaterColor.a * biomeWaterColor.a;
+
+    //ApplyWaterScattering(color.rgb, Ts, Ta, skyLightingColorRaw, biomeWaterColor.rgb, sDistnce);
+  }
+
+  //color.rgb = encodeGamma(color.rgb);
+
+  vec4 rayColor = texture2D(gaux1, texcoord * LightShaft_Quality);
+  //color.rgb += rayColor.rgb;
+  /*
+  if(bool(albedo.a)){
+    vec3 frontPosition = nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, texture(depthtex0, texcoord).x) * 2.0 - 1.0));
+    vec3 solidPosition = nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, texture(depthtex1, texcoord).x) * 2.0 - 1.0));
+    vec3 backPosition  = nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, texture(gaux1, texcoord).x) * 2.0 - 1.0));
+
+    float hL = length(frontPosition - solidPosition);
+    float bL = length(frontPosition - backPosition);
+    float d = min(hL, bL);//min(bL, hL);
+
+    color.rgb = vec3(d * 0.001);//max(0.0, length(nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, texture(gaux1, texcoord).x) * 2.0 - 1.0)))) * vec3(1.0 / 1000.0);
+  }
+  */
+  color.rgb = encodeGamma(color.rgb * encodeHDR);
+
   /*
   if(isEyeInWater == 1){
     vec4 waterAlbedo = eyesWaterColor;
@@ -713,6 +1121,8 @@ void main(){
   }
   */
 
+  //color.rgb *= step((texture(depthtex0, texcoord).x), 0.7);
+
   float dither = GetBlueNoise(depthtex2, texcoord, resolution.y, jittering);
 
   vec4 albedo2 = vec4(albedo.rgb, alpha);
@@ -724,21 +1134,8 @@ void main(){
   }
 
   vec3 lightingColor = G2Linear(skyLightingColorRaw);
-       lightingColor = normalize(lightingColor) * 0.5;
-  if(isWater) lightingColor = vec3(dot03(lightingColor));
-
-  if(TIR) color.rgb = eyesWaterColor.rgb * dot03(lightingColor) * 0.5;
-
-  if(isEyeInWater == 1){
-    vec4 biomeWaterColor = eyesWaterColor;
-
-    vec3 Ta = GetAbsorptionCoe(eyesWaterColor);
-    vec3 Ts = GetScatteringCoe(eyesWaterColor);
-
-    float sDistnce = viewLength + biomeWaterColor.a * biomeWaterColor.a;
-
-    ApplyWaterScattering(color.rgb, Ts, Ta, lightingColor, biomeWaterColor.rgb, sDistnce);
-  }
+  //     lightingColor = normalize(lightingColor) * 0.5;
+  //if(isWater) lightingColor = vec3(dot03(lightingColor));
 
   vec4 p1 = gbufferProjectionInverse * nvec4(vec3(coord, texture(depthtex1, coord).x) * 2.0 - 1.0);
        p1 /= p1.w;
@@ -763,9 +1160,9 @@ void main(){
   }
 
   if(isEyeInWater == 1 || bool(albedo.a)){
-    color.rgb += CalculateRayMarchingScattering(p1, p0, dither, Ta, Ts, albedo2.rgb, sqrt(maxDepth)).rgb;
+    //color.rgb += CalculateRayMarchingScattering(p1, p0, dither, Ta, Ts, albedo2.rgb, sqrt(maxDepth)).rgb;
   }
-
+  //color.rgb = mat3(gbufferModelViewInverse) * visibleNormal;
   //
   //vec4 p0 =
   //vec4 p1 =
@@ -779,7 +1176,7 @@ void main(){
   //color.rgb = vec3(isParticels || emissiveParticels);
 
   //color.rgb
-  vec4 rayColor = texture2D(gaux1, texcoord * LightShaft_Quality);
+
   //color.rgb
 
   //color.rgb *= exp(-vec3(0.12, 0.16, 0.2) * 0.03 * viewLength);
@@ -986,9 +1383,134 @@ void main(){
 */
 
   color.a = max(albedo.a, float(!isSky));
-  color.rgb /= overRange;
 
-  /* DRAWBUFFERS:25 */
-  gl_FragData[0] = vec4(smoothness, metallic, normalEncode(normalVisible));
+  vec4 tex = vec4(texture2D(gcolor, texcoord).rgb, 1.0);
+  if(bool(step(0.5, albedo.a))) tex.a = min(0.99, texture(gnormal, texcoord).x * 0.8 + 0.2);
+  if(isSky) tex = vec4(vec3(0.0), 1.0);
+
+  color.a = max(emissive * 100.0, step(14.0, torchLightMap * 15.0) * 0.0);
+
+  //color.rgb = mat3(gbufferModelViewInverse) * texturedNormal;
+  /*
+  vec3 uv = mat3(gbufferModelViewInverse) * reflect(normalize(viewPosition), flatNormal);
+			 uv = uv.xzy;
+			 uv.xy /= 1.0 + sqrt(uv.z * uv.z);
+
+	uv.xy = uv.xy * 0.5 + 0.5;
+  //uv.xy = round(uv.xy * 512.0) / 512.0;
+	uv.xy *= 0.2;
+	uv.x += 0.8;
+
+	if(uv.z < 0.0){
+		//uv.y = 0.2 - uv.y;
+	}
+  uv.y += 0.2;
+
+  float mapReflectionAlpha = 1.0;
+
+  float sp = 1.0 / 2560.0;
+
+  for(float i = -1.0; i <= 1.0; i += 1.0){
+    for(float j = -1.0; j <= 1.0; j += 1.0){
+      vec2 coord = round(uv.xy * 2560.0 + vec2(i, j)) / 2560.0;
+
+      if(texture(shadowtex0, coord).x > 0.999) {
+        mapReflectionAlpha = 0.0; break;
+      }
+    }
+  }
+
+	vec3 mapReflectionAlbedo = decodeGamma(texture2D(shadowcolor1, uv.xy).rgb);
+  vec3 mapReflectionNormal = mat3(gbufferModelView) * (texture2D(shadowcolor0, uv.xy).xyz * 2.0 - 1.0);
+
+  float encodeLightMap = texture2D(shadowcolor1, uv.xy).a;
+  vec2 lightMap = vec2(fract(encodeLightMap * 16.0), floor(encodeLightMap * 16.0) / 15.0);
+       lightMap.x = saturate(1.0 - lightMap.x * 100.0);
+
+
+  //uv.xy = texcoord;
+  vec4 sphereViewPosition = vec4(texture2D(shadowcolor1, uv.xy).xyz * 2.0 - 1.0, 1.0);//gbufferProjectionInverse * vec4(vec3(uv.xy, texture(shadowcolor1, uv.xy).b) * 2.0 - 1.0, 1.0);
+       //sphereViewPosition /= sphereViewPosition.w;
+
+  float dist = 0.0;
+  vec3 sphereShadowCoord = wP2sP(sphereViewPosition, dist);
+
+  float shading = step(sphereShadowCoord.z, texture(shadowtex0, sphereShadowCoord.xy).x + 0.001);
+
+  vec3 torchLight = mapReflectionAlbedo.rgb * lightMap.x * torchLightingColor;
+  vec3 skyLight = mapReflectionAlbedo.rgb * lightMap.y * skyLightingColorRaw;
+  vec3 sunLight = mapReflectionAlbedo.rgb * sunLightingColorRaw * saturate(dot(normalize(shadowLightPosition), mapReflectionNormal)) * fading * lightMap.y;
+
+  vec3 mapReflection = mapReflectionAlbedo * 0.01 * vec3(invPi) * step(uv.z, 0.0) * step(texture(shadowtex0, uv.xy).x, texture(shadowtex0, uv.xy - vec2(0.0, 0.2)).x + 0.001);
+  */
+	//color.rgb = encodeGamma(mapReflection * encodeHDR);// * step(10.0, length(mapViewPosition.xyz));
+
+  //color.rgb = encodeGamma(color.rgb);
+
+  //if(texcoord.x > 0.7)
+
+  //color.rgb = vec3(step(texture(shadowtex0, texcoord).x, texture(depthtex0, texcoord).x)) * 0.001;
+  /*
+  vec3 uv = mat3(gbufferModelViewInverse) * reflect(normalize(viewPosition), flatNormal); uv = uv.xzy;
+  
+  uv.z += near * near * 2.0 * length(uv.xy) * sign(uv.z);
+
+  uv = normalize(uv);
+
+  uv.xy = uv.xy / (abs(uv.z) + 1.0);
+
+  uv.xy = uv.xy * 0.5 + 0.5;
+
+  if(uv.z > 0.0){
+    uv.x = 1.0 - uv.x;
+  }
+
+  uv.xy *= 0.2;
+  uv.x += 0.8;
+
+  if(uv.z > 0.0) {
+    uv.y += 0.4;
+  }
+  
+  float dist = 0.0;
+
+  color.rgb = vec3(texture2D(shadowcolor1, uv.xy).rgb) * 0.01;
+  */
+
+  //vec3 sphereShadowCoord = texture2D(shadowcolor1, texcoord).rgb;
+  //if(sphereShadowCoord.z < texture(shadowtex1, sphereShadowCoord.xy).x);
+
+  //color.rgb = vec3(texture2D(shadowcolor0, texcoord).aaa * 0.01);
+
+  //float z = length()
+  //sP.xy /= length(uv.xyz * 2.0 - 1.0);
+
+  //color.rgb = step(sP.z, texture(shadowtex0, sP.xy).x) * vec3(0.01);
+
+  //color.rgb = vec3(0.01) * step(length(sphereViewPosition.xyz), 3.0);
+  //color *= step(texture(shadowtex0, uv.xy).x * far, 3.0);
+
+  //color.rgb *= texture2D(shadowcolor1, uv.xy).rgb;
+  //color.rgb = texture2D(gcolor, texcoord * 2.0).rgb * 0.01;
+  /*
+  if(texcoord.x < 0.5){
+    //color.rgb = texture2D(shadowcolor1, texcoord * 0.5).rgb * 0.01;
+
+    vec3 uv3 = vec3(texcoord * 0.5, texture(shadowtex0, texcoord * 0.5).x) * 2.0 - 1.0;
+    uv3 = uv3 / length(uv3);
+    uv3 = uv3 / (uv3.z + 1.0);
+
+  }else{
+    color.rgb = step(texture(depthtex0, texcoord).x, 0.995) * vec3(0.01) * texture2D(gcolor, texcoord).rgb;
+  }
+
+  */
+  //color.rgb = vec3(0.01) * texture2D(shadowcolor1, texcoord.xy).rgb;
+  //color.rgb = vec3(pow(pow(texture2D(shadowtex0, texcoord * 0.4 + vec2(0.8, 0.0)).x, 2.2) * encodeHDR, 1.0 / 2.2));
+  //color.rgb = vec3(texture(depthtex0, texcoord).x * 0.005);
+
+  /* DRAWBUFFERS:05 */
+  gl_FragData[0] = tex;
+  //gl_FragData[1] = vec4(reflectionMap, 1.0);
   gl_FragData[1] = color;
 }

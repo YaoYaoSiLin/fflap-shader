@@ -2,13 +2,18 @@
 
 //#define RawOut
 #define Enabled_TAA
-	#define TAA_ToneMapping 0x4fff //[OFF 0xfff 0x1fff 0x3fff 0x4fff 0x5fff 0x6fff 0x7fff 0xffff]
+	#define TAA_ToneMapping 0x7ff 		//[OFF 0xff 0x1ff 0x2ff 0x3ff 0x7ff 0xfff 0x1ffff 0x3fff 0x7fff 0xffff]
+
+#define Enabled_Bloom
 
 uniform sampler2D gaux2;
+uniform sampler2D gaux3;
 
 uniform float viewWidth;
 uniform float viewHeight;
 uniform float aspectRatio;
+
+uniform int frameCounter;
 
 in vec2 texcoord;
 
@@ -18,12 +23,9 @@ vec2 resolution = vec2(viewWidth, viewHeight);
 vec2 pixel      = 1.0 / vec2(viewWidth, viewHeight);
 
 #include "../libs/common.inc"
-
-#define Stage Bloom
-#define bloomSampler gaux2
-
+#include "../libs/jittering.glsl"
 #include "../libs/dither.glsl"
-#include "../libs/PostProcessing.glsl"
+#include "../lib/packing.glsl"
 
 vec3 Uncharted2Tonemap(in vec3 color, in float x) {
 	float A = 2.51;
@@ -64,95 +66,96 @@ vec3 ACESToneMapping(in vec3 color, in float adapted_lum) {
 
 //https://graphicrants.blogspot.com/2013/12/tone-mapping.html
 vec3 KarisToneMapping(in vec3 color){
-	float a = 0.01953;
-	float b = float(TAA_ToneMapping) / 65535.0;
+	float a = 0.0027;
+	float b = float(0x9fff) / 65535.0;
 
-	float luma = maxComponent(color);
+	float lum = maxComponent(color);
 
-	if(luma > a) color = color/luma*((a*a-b*luma)/(2.0*a-b-luma));
-	return color;
+	if(bool(step(lum, a))) return color;
+
+	return color/lum*((a*a-b*lum)/(2.0*a-b-lum));
+
+	//return color;
+
+	//if(luma > a) 
+	//color = color / luma*((a*a-b*luma)/(2.0*a-b-luma));
+	//return color;
 }
 
-vec4 ReprojectSampler(in sampler2D tex, in vec2 pixelPos){
-	vec4 result = vec4(0.0);
+const float sigma = 0.83;
+const float phi = 2.0 * sigma * sigma;
 
-	float weights = 0.0;
+vec3 GetBloomSample(in vec2 coord, in vec2 offset, in float mipmap){
+	float radius = 1.0;
 
-	vec3 centerColor = texture2D(tex, pixelPos).rgb * overRange;
+	coord -= offset;
 
-	vec3 minColor = vec3(100.0);
-	vec3 maxColor = vec3(0.0);
+	coord = round(coord * resolution + 2.0) * mipmap * pixel;
+	if(floor(coord) != vec2(0.0)) return vec3(0.0);
 
-	for(float i = -1.0; i <= 1.0; i += 1.0){
-		for(float j = -1.0; j <= 1.0; j += 1.0){
-			vec2 samplePos = vec2(i, j) * 0.5;
-			float weight = gaussianBlurWeights(samplePos + 0.0001);
+	vec4 blur = vec4(0.0);
 
-			vec4 sampler = texture2D(tex, pixelPos + samplePos * pixel);
+	for(float i = -radius; i <= radius; i += 1.0){
+		for(float j = -radius; j <= radius; j += 1.0){
+			//if(i == 0.0 && j == 0.0) continue;
 
-			vec3 sampler2 = texture2D(tex, pixelPos + vec2(i, j) * pixel).rgb * overRange;
-			minColor = min(minColor, sampler2);
-			maxColor = max(maxColor, sampler2);
+			vec2 direction = vec2(i, j);
+			//direction += saturate(abs(direction) - 1.0) * vec2(sign(direction.x), sign(direction.y));
 
-			weights += weight;
-			result += sampler * weight;
+			vec2 bloomCoord = coord + direction * pixel * mipmap;
+			if(floor(bloomCoord) != vec2(0.0)) continue;
+
+			float l2 = (direction.x * direction.x + direction.y * direction.y + 1e-5);
+			float weight = exp(-l2 / phi);
+
+			vec3 bloomSample = decodeGamma(texture2D(gaux2, bloomCoord).rgb);
+			//vec3 bloomSample = decodeGamma(texture2DLod(gaux2, bloomCoord, (mipmap - 2.0) * 0.25).rgb);
+					 bloomSample = sqrt(bloomSample * luminance(bloomSample));
+					 bloomSample = saturation(bloomSample, 2.0);
+
+			blur.rgb += bloomSample * weight;
+			blur.a += weight;
 		}
 	}
 
-	result /= weights;
-	result *= overRange;
-
-	vec3 blend = saturate((maxColor - minColor) / centerColor);
-			 blend = mix(vec3(0.25), vec3(0.75), blend);
-
-	result.rgb = mix(centerColor, result.rgb, blend);
-
-
-	return result;
-}
-
-vec4 opElongate( in vec3 p, in vec3 h )
-{
-    //return vec4( p-clamp(p,-h,h), 0.0 ); // faster, but produces zero in the interior elongated box
-
-    vec3 q = abs(p)-h;
-    return vec4(max(q,vec3(0.0)), min(maxComponent(q), 0.0));
+	return blur.rgb / blur.a;
 }
 
 void main() {
-  vec4 bloom = vec4(0.0);
-
-  #ifdef Enabled_Bloom
-	bloom = CalculateBloomSampler(texcoord);
-  #endif
+  vec3 bloom = vec3(0.0);
 
   vec3 color = texture2D(gaux2, texcoord).rgb;
-	color *= overRange;
+	   color = decodeGamma(color) * decodeHDR;
 
-	//if(floor(coord) != vec2(0.0)) color = vec3(0.0);
+	vec2 bloomOffset = pixel * 5.0;
+
+	//color = vec3(0.0);
+
+	#ifdef Enabled_Bloom
+
+	for(int level = 2; level < 6; level++){
+		float mipmap = exp2(float(level));
+
+		// + (pixel * mipmap * 0.0625 * vec2(1.0, aspectRatio))
+		bloom += GetBloomSample(texcoord, bloomOffset, mipmap);
+		bloomOffset.x += (1.0 / mipmap) + pixel.x * mipmap + pixel.x * 5.0;
+	}
+
+	bloom = encodeGamma(bloom);
+	#endif
 
 	#if defined(Enabled_TAA) && TAA_ToneMapping > OFF
-	//if(texcoord.x > 0.5)
-	color = ReprojectSampler(gaux2, texcoord).rgb;
-	//color = texture2D(gaux2, round(texcoord * resolution) * pixel).rgb * overRange;
-
-	//color = getLum(color);
-	//color = color * vec3(0.25, 0.3, 0.45) / 0.5;
-
-	//float luma = getLum(color);
-
-	//color = mix(color * vec3(0.2, 0.99, 0.5) * 2.0, color, saturate((luma * overRange - 0.5)));
-	//color = mix(color * vec3(0.2, 0.3, 0.5) * 2.0, color, saturate(vec3(luma) * overRange * 127.0 - 127.0));
-
-	color = KarisToneMapping(color);
+	color = KarisToneMapping(color * 30.0);
 	#endif
+
+	color = encodeGamma(color);
 
 	#ifndef RawOut
 
 	#endif
 
 /* DRAWBUFFERS:235 */
-  gl_FragData[0] = bloom;
+  gl_FragData[0] = vec4(bloom, 1.0);
   gl_FragData[1] = vec4(texture2D(gaux2, texcoord).rgb, 1.0);
   gl_FragData[2] = vec4(color, 1.0);
 }

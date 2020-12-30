@@ -3,17 +3,11 @@
 //#extension GL_EXT_gpu_shader4 : require
 //#extension GL_EXT_gpu_shader5 : require
 
-//#define Enabled_SSAO
-
-#define Global_Illumination
-
 #define Enabled_ScreenSpace_Shadow
 //#define Fast_Normal
 
 #define AtmosphericScattering_Steps 8
 #define AtmosphericScattering_Stepss 8
-
-#define GI_Rendering_Scale 0.5 //[0.353553 0.5]
 
 const int noiseTextureResolution = 64;
 
@@ -48,6 +42,8 @@ uniform vec3 cameraPosition;
 uniform vec3 shadowLightPosition;
 uniform vec3 upPosition;
 
+uniform vec2 jitter;
+
 uniform int isEyeInWater;
 uniform int heldBlockLightValue;
 uniform int heldBlockLightValue2;
@@ -77,17 +73,6 @@ in vec3 skyLightingColorRaw;
 
 vec2 resolution = vec2(viewWidth, viewHeight);
 vec2 pixel = 1.0 / vec2(viewWidth, viewHeight);
-#define Gaussian_Blur
-#include "../libs/common.inc"
-#include "../libs/dither.glsl"
-#include "../libs/jittering.glsl"
-
-#define CalculateHightLight 1
-#define CalculateShadingColor 1
-
-#include "../libs/brdf.glsl"
-#include "../libs/light.glsl"
-#include "../libs/atmospheric.glsl"
 
 vec2 normalEncode(vec3 n) {
     vec2 enc = normalize(n.xy) * (sqrt(-n.z*0.5+0.5));
@@ -102,6 +87,22 @@ vec3 normalDecode(vec2 enc) {
     nn.xy *= sqrt(l);
     return nn.xyz * 2.0 + vec3(0.0, 0.0, -1.0);
 }
+
+#include "../libs/common.inc"
+
+#define CalculateShadingColor 1
+#define CalculateHightLight 1
+#define Enabled_SSAO
+//#define Enabled_SSAO_High_Quality
+
+#ifdef Enabled_SSAO_High_Quality
+#endif
+
+#include "../libs/dither.glsl"
+#include "../libs/jittering.glsl"
+#include "../libs/brdf.glsl"
+#include "../libs/light.glsl"
+#include "../libs/atmospheric.glsl"
 
 float LinearlizeDepth(float depth) {
     return (far * (depth - near)) / (depth * (far - near));
@@ -138,28 +139,6 @@ vec4 GetViewPosition(in vec2 coord, in float depth){
   return vP;
 }
 
-#ifdef Enabled_SSAO
-float CalculateAOBlur(){
-  vec2 fragCoord = floor(texcoord * resolution);
-  float checker = mod(fragCoord.x * fragCoord.y, 2);
-
-  vec2 coord = texcoord * 0.5;
-
-  float ao = 0.0;
-
-  if(checker < 0.5){
-    ao += texture(gaux2, coord + vec2(pixel.x, 0.0)).r;
-    ao += texture(gaux2, coord - vec2(pixel.x, 0.0)).r;
-    ao += texture(gaux2, coord + vec2(pixel.y, 0.0)).r;
-    ao += texture(gaux2, coord - vec2(pixel.y, 0.0)).r;
-    ao *= 0.25;
-
-    return ao;
-  }
-
-  return texture(gaux2, coord).r;
-}
-#endif
 /*
 vec4 textureChecker(in sampler2D sampler, in vec2 coord){
   float renderScale = 0.5;
@@ -689,7 +668,7 @@ vec4 ImportanceSampleGGX(in vec2 E, in float roughness){
 vec3 UpSampleRSM(in vec2 coord, in vec3 normal1x, in float depth1x){
   vec3 tex = vec3(0.0);
 
-  coord *= GI_Rendering_Scale;
+  coord *= 0.5;
   //coord = floor(coord * resolution) * pixel;
 
   depth1x = linearizeDepth(depth1x);
@@ -885,63 +864,59 @@ void main() {
   vec4 albedo = texture2D(gcolor, texcoord);
 
   vec4 lightingData = texture2D(gdepth, texcoord);
-  float blocksLightingMap = lightingData.r;
-  float skyLightingMap = clamp01((lightingData.g - 0.03125) * 1.0723);
+
+  vec2 lightMap = unpack2x8(lightingData.x);
+
+  float blocksLightingMap = lightMap.x;
+  float emissive = lightingData.b;//max(lightingData.b, floor(blocksLightingMap * 15.0) / 15.0);
+
+  float skyLightingMap = clamp01((lightMap.y - 0.03125) * 1.0723);
         skyLightingMap = pow3(skyLightingMap);
-  float emissive = lightingData.a;
-  float selfShadow = texture2D(gnormal, texcoord).a;
-  #if MC_VERSION > 11404
-    //selfShadow = 1.0;
-    //emissive = 0.0;
-  #endif
 
-  vec3 normalVisible = normalDecode(texture2D(gnormal, texcoord).xy);
-  vec3 normalSurface = normalDecode(texture2D(composite, texcoord).xy);
-  vec3 blockNormal = normalVisible;
+  float selfShadow = lightingData.y;
 
-  float smoothness = texture2D(gnormal, texcoord).b;
-  float metallic = texture2D(composite, texcoord).b;
-  float roughness = 1.0 - smoothness; roughness *= roughness;
+  vec3 flatNormal = normalDecode(texture2D(gnormal, texcoord).xy);
+  vec3 texturedNormal = normalDecode(texture2D(composite, texcoord).xy);
+  vec3 visibleNormal = texturedNormal;
+
+  vec2 specularPackge = unpack2x8(texture2D(composite, texcoord).b);
+
+  float roughness = pow2(1.0 - specularPackge.x);
+  float metallic = specularPackge.y;
+
   vec3 F0 = vec3(max(0.02, metallic));
-       F0 = mix(F0, albedo.rgb, step(0.5, metallic));
+       F0 = mix(F0, decodeGamma(albedo.rgb), step(0.5, metallic));
 
-  float mask = round(lightingData.z * 255.0);
-  bool isSky = bool(step(254.5, mask));
-  bool isParticels = bool(step(249.5, mask) * step(mask, 250.5));
-  bool emissiveParticels = bool(step(250.5, mask) * step(mask, 252.5));
-  bool isLeaves = CalculateMaskID(18.0, mask);
-  bool isGrass = CalculateMaskID(31.0, mask);
-  bool isWool = CalculateMaskID(35.0, mask);
+  float material = round(texture2D(gnormal, texcoord).z * 255.0);
+  bool isSky = bool(step(254.5, material));
+  bool isParticels = bool(step(249.5, material) * step(material, 250.5));
+  bool emissiveParticels = bool(step(250.5, material) * step(material, 252.5));
+  bool isLeaves = CalculateMaskID(18.0, material);
+  bool isGrass = CalculateMaskID(31.0, material);
+  bool isWool = CalculateMaskID(35.0, material);
 
   float depth = texture2D(depthtex0, texcoord).x;
-  float depthParticle = texture2D(gaux2, texcoord).a;
+  float depthParticle = texture2D(gaux1, texcoord).x;
   if(0.0 < depthParticle && depthParticle < depth) depth = depthParticle;
 
   vec4 vP = GetViewPosition(texcoord, depth);
   vec4 wP = gbufferModelViewInverse * vP;
   vec3 sP = mat3(gbufferModelViewInverse) * normalize(sunPosition);
   vec3 nvP = normalize(vP.xyz);
-  vec3 reflectP = normalize(reflect(nvP, normalVisible));
 
-  #ifdef Enabled_TAA
-    vec4 vPJ = GetViewPosition(jitteringCoord, texture(depthtex0, jitteringCoord).x);
-    vec4 wPJ = gbufferModelViewInverse * vPJ;
-  #else
-    vec4 vPJ = vP;
-    vec4 wPJ = wP;
-  #endif
-
-  float ndotv = dot(nvP, normalSurface);
-  if(-0.15 > ndotv) normalVisible = normalSurface;
+  float ndotv = dot(-nvP, texturedNormal);
+  if(bool(step(ndotv, 0.2))) visibleNormal = flatNormal;
 
   if(isParticels) {
-    vec3 normal = nvec3(gbufferProjectionInverse * nvec4(vec3(0.5, 0.5, 0.7) * 2.0 - 1.0));
-         normal = normalize(-normal);
+    vec3 facingToPlayer = nvec3(gbufferProjectionInverse * nvec4(vec3(0.5, 0.5, 0.7) * 2.0 - 1.0));
+         facingToPlayer = normalize(-facingToPlayer);
 
-    //normalVisible = normal;
-    //blockNormal = normalVisible;
-    //normalSurface = normal;
+    visibleNormal = facingToPlayer;
+    texturedNormal = facingToPlayer;
+    flatNormal = facingToPlayer;
   }
+
+  vec3 reflectP = normalize(reflect(nvP, visibleNormal));
 
   float viewLength = length(vP.xyz);
 
@@ -952,12 +927,13 @@ void main() {
   vec3 nshadowLightPosition = normalize(shadowLightPosition);
   vec3 centerviewPosition = GetViewPosition(vec2(0.5), 0.9).xyz;
 
-  vec4 vPjittering = GetViewPosition(jitteringCoord);
+  vec4 jitterViewPosition = GetViewPosition(texcoord - jitter);
+  vec4 jitterWorldPosition = gbufferModelViewInverse * jitterViewPosition;
 
   vec3 color = vec3(0.0);
 
   vec3 albedoL = albedo.rgb;
-  albedo.rgb = rgb2L(albedo.rgb);
+  albedo.rgb = decodeGamma(albedo.rgb);
 
   vec3 lightPosition = sunPosition;
   if(sP.y < -0.1) lightPosition = -lightPosition;
@@ -966,48 +942,76 @@ void main() {
   vec3 torchLightingColor = vec3(1.049, 0.5821, 0.0955);
 
   if(!isSky){
-    float ao = UpSampleAO(texcoord, normalSurface);
-          ao = L2Gamma(ao).x;
+    float ambientOcclusion = 1.0;
 
-    #ifndef Global_Illumination
-      ao = 1.0;
-      //ao = CalculateAOBlur();
-      //ao = pow(ao, 2.2);
+    #ifdef Enabled_SSAO
+    ambientOcclusion = texture(gaux2, texcoord * 0.5).x;
     #endif
 
-    float blocksSideSunVisibility = step(0.01, dot(blockNormal, nshadowLightPosition));
+    float blocksSideSunVisibility = step(1e-5, dot(flatNormal, nshadowLightPosition));
+      
+    vec3 shading = vec3(0.0);
+    
+    if(bool(blocksSideSunVisibility)){
+      vec4 sunShading = CalculateShading(shadowtex1, shadowtex0, jitterWorldPosition, blocksSideSunVisibility, flatNormal);
 
-    vec4 sunShading = CalculateShading(shadowtex1, shadowtex0, wP, blocksSideSunVisibility, blockNormal);
+      shading = mix(vec3(1.0), sunShading.rgb, sunShading.a);
+
+      #ifdef Enabled_ScreenSpace_Shadow
+        vec3 sssDirection = vP.xyz;
+            sssDirection += flatNormal * sqrt(vP.z * vP.z) * 0.001 / MC_RENDER_QUALITY * blocksSideSunVisibility;
+
+        vec3 sdfShadow = ScreenSpaceShadow(nshadowLightPosition, sssDirection);
+
+        shading *= sdfShadow;
+      #endif    
+    }
+    /*
+    
+    vec4 sunShading = CalculateShading(shadowtex1, shadowtex0, jitterWorldPosition, blocksSideSunVisibility, flatNormal);
     vec3 shading = mix(vec3(1.0), sunShading.rgb, sunShading.a);
+
+    vec3 sdfShadow = vec3(1.0);
 
     #ifdef Enabled_ScreenSpace_Shadow
       vec3 sssDirection = vP.xyz;
-           sssDirection += blockNormal * sqrt(vP.z * vP.z) * 0.001 * blocksSideSunVisibility;
+           sssDirection += flatNormal * sqrt(vP.z * vP.z) * 0.0005 * blocksSideSunVisibility;
 
-      float sdfShadow = ScreenSpaceShadow(nshadowLightPosition, sssDirection);
+      sdfShadow = ScreenSpaceShadow(nshadowLightPosition, sssDirection);
       //shading = vec3(1.0);
+
       shading *= sdfShadow;
     #endif
 
     if(!bool(blocksSideSunVisibility)) shading = vec3(0.0);
+  */
 
-    vec3 sunLighting = BRDFLighting(albedo.rgb, normalize(shadowLightPosition), -nvP, normalVisible, normalSurface, L2Gamma(F0), roughness, metallic);
+    //if(bool(step(dot(flatNormal, nshadowLightPosition), 1e-5))) shading = vec3(0.0, 1.0, 0.0);
+    /*
+    vec3 sunLighting = BRDFLighting(albedo.rgb, normalize(shadowLightPosition), -nvP, visibleNormal, texturedNormal, F0, roughness, metallic);
          sunLighting *= shading * fading;
          sunLighting = (sunLighting) * sunLightingColorRaw;
     if(isEyeInWater != 1) sunLighting *= smoothstep(0.7333, 0.8, max(float(eyeBrightness.y) / 60.0, lightingData.y));
          //sunLighting = sunLighting * vec3(0.008, 0.02, 0.09);
     color = sunLighting * SunLight;
+    */
 
-    //vec3 heldLighting = BRDF(albedoL, -nvP, -nvP, normalVisible, normalSurface, roughness, metallic, rgb2L(F0));
+    vec3 sunDirectLight = DiffuseLight(albedo.rgb, normalize(shadowLightPosition), -nvP, visibleNormal, texturedNormal, F0, roughness, metallic)
+                        + SpecularLight(albedo.rgb, normalize(shadowLightPosition), -nvP, visibleNormal, texturedNormal, F0, roughness, metallic);
+    if(isEyeInWater != 1) sunDirectLight *= smoothstep(0.7333, 0.8, max(float(eyeBrightness.y) / 60.0, lightingData.y));
+
+    color += sunDirectLight * shading * fading * sunLightingColorRaw * SunLight * 2.0;
+
+    //vec3 heldLighting = BRDF(albedoL, -nvP, -nvP, visibleNormal, texturedNormal, roughness, metallic, rgb2L(F0));
     vec3 m = normalize(reflectP - nvP);
 
     float vdoth = pow5(1.0 - clamp01(dot(-nvP, m)));
-    float ndotm = clamp01(dot(m, normalVisible));
-    float ndotu = dot(normalSurface, centerupPosition);
-    float ndotl = dot(normalSurface, nlightPosition);
+    float ndotm = clamp01(dot(m, visibleNormal));
+    float ndotu = dot(texturedNormal, centerupPosition);
+    float ndotl = dot(texturedNormal, nlightPosition);
 
     vec3 f = F(F0, vdoth);
-    float brdf = min(1.0, CalculateBRDF(-nvP, reflectP, normalVisible, roughness));
+    float brdf = min(1.0, CalculateBRDF(-nvP, reflectP, visibleNormal, roughness));
     float d = DistributionTerm(roughness * roughness, ndotm);
     float nd = NormalizedDiffusion(length(nlightPosition - nvP), d);
 
@@ -1015,52 +1019,46 @@ void main() {
     float FdV = 1.0 + (FD90 - 1.0) * vdoth;
     float FdL = 1.0 + (FD90 - 1.0) * pow5(clamp01(ndotl));
 
-    float NdotL = dot(centerupPosition, normalSurface);
+    float NdotL = dot(centerupPosition, texturedNormal);
     float ldotu = max(0.0, dot(nshadowLightPosition, centerupPosition));
 
-    vec3 ambient = albedo.rgb * skyLightingColorRaw * (ao + ndotu + 1.0) * 0.333;
+    vec3 upDirection = normalize(upPosition);
+    vec3 eveDirection = -nvP;
+    vec3 reflectDirection = normalize(reflect(-eveDirection, visibleNormal));
 
-    vec3 diffuse = ambient * skyLightingMap;
+    vec3 skyDirect = 0.01 * (1.0 - F(F0, pow5(max(0.0, dot(eveDirection, normalize(upDirection + eveDirection))))));
+    float skyDiffuse = skyLightingMap + ambientOcclusion;
 
-    #ifdef Global_Illumination
-    vec3 indirect = UpSampleRSM(texcoord, normalSurface, depth).rgb;
-    //indirect = sqrt(indirect * getLum(indirect));
-    //indirect = L2Gamma(indirect);
+    vec3 skyLightDiffuse = (1.0 - f) * (skyLightingMap * saturate(dot(reflectDirection, visibleNormal)) + ambientOcclusion);
+    vec3 skyLightDirect = vec3(pow2(skyLightingMap) * saturate(ndotu));
 
-    //indirect *= normalize(albedo.rgb) * sqrt(getLum(albedo.rgb));
-    diffuse += indirect * invPi * albedo.rgb * sunLightingColorRaw * SunLight * fading * (1.0 - metallic);
-    #else
-    vec3 indirect = albedo.rgb * sunLightingColorRaw * fading * SunLight * invPi;
+    vec3 ambient = skyLightDiffuse + skyLightDirect * 2.0;
 
-    indirect *= saturate(pow5(dot(-centerupPosition, normalSurface) + 1.0));
-    indirect *= dot03(skyLightingColorRaw) * skyLightingMap * ao;
+    vec3 diffuse = invPi * albedo.rgb * ambient * skyLightingColorRaw * skyLightingMap;
+
+    //vec3 indirect = albedo.rgb * sunLightingColorRaw * fading * SunLight * invPi;
+
+    //indirect *= saturate(pow5(dot(-centerupPosition, texturedNormal) + 1.0));
+    //indirect *= dot03(skyLightingColorRaw) * skyLightingMap * ambientOcclusion;
 
     //diffuse += indirect * 3.0;
-    #endif
 
-    float lightingRadius = max(float(heldBlockLightValue), float(heldBlockLightValue2));;
+    float lightingRadius = max(float(heldBlockLightValue), float(heldBlockLightValue2));
 
-    vec3 heldLightingBRDF = BRDFLighting(albedo.rgb, -nvP, -nvP, normalVisible, normalSurface, L2Gamma(F0), roughness, metallic);
-
-    float heldLightingDistance = max(0.0, lightingRadius - viewLength) / lightingRadius;
-          heldLightingDistance = pow2(heldLightingDistance * heldLightingDistance);
-    vec3 heldLighting = clamp01(1.0 - exp(-torchLightingColor * heldLightingDistance * 0.125));
-         heldLighting *= heldLightingBRDF;
+    vec3 heldLightingBRDF = BRDFLighting(albedo.rgb, -nvP, -nvP, visibleNormal, texturedNormal, F0, roughness, metallic);
 
     float torchLightMap = max(0.0, blocksLightingMap - 0.0667) * 1.071;
-          torchLightMap = pow2(torchLightMap * torchLightMap);
 
-    vec3 lightMapLighting = clamp01(1.0 - exp(-(torchLightingColor) * 0.125 * torchLightMap));
-         lightMapLighting *= albedo.rgb;
-         lightMapLighting *= pow5(abs(dot(normalSurface, blockNormal)));
-         lightMapLighting *= mix(vec3(1.0), albedo.rgb * max(0.0, blocksLightingMap * 16.0 - 14.5), step(0.5, metallic));
+    vec3 heldTorchLight = heldLightingBRDF * saturate(1.0 / pow3(15.0 - max(0.0, lightingRadius - viewLength))) * step(1.0, lightingRadius);
+    vec3 torchLight  = invPi * albedo.rgb * saturate(1.0 / pow3(15.0 - torchLightMap * 15.0)) * (1.0 - metallic);
+         //torchLight += invPi * albedo.rgb * albedo.rgb * saturate(1.0 / pow3(15.0 - torchLightMap * 15.0)) * ambientOcclusion * (1.0 - metallic);
+         torchLight *= saturate(pow3(blocksLightingMap) * Pi);
 
-    vec3 torchLignting = (lightMapLighting + heldLighting * Pi);
-         torchLignting *= exp(-maxComponent(sunLightingColorRaw + skyLightingColorRaw) * Pi * skyLightingMap);
+    color += (heldTorchLight + torchLight) * torchLightingColor;
+    //color = vec3(step(lightingRadius, viewLength));
 
-    color += (torchLignting);
-
-    diffuse *= (1.0 - max(f, metallic) * brdf);
+    diffuse *= 1.0 - metallic;
+    //diffuse *= 1.0 - f * brdf;
 
     color += diffuse;
 
@@ -1079,42 +1077,57 @@ void main() {
     if(emissiveParticels) color *= 1.0 - emissive;
     color += emissive * albedo.rgb * 4.56;
 
+    //color = vec3(1.0) * step(0.04, metallic) * step(metallic, 0.99);
+
+    //color = diffuse;
+
     //color = vec3((nd));
 
-    //color = albedo.rgb;
+    //color = clamp01(mat3(gbufferModelViewInverse) * flatNormal);
     //color = gi * 0.5;
-    //color = UpSampleGI(gaux2, texcoord, normalSurface, depth).rgb;
+    //color = UpSampleGI(gaux2, texcoord, texturedNormal, depth).rgb;
     //if(texcoord.x > 0.5) color = texture2D(gcolor, texcoord).rgb;
     //color = texture2D(gaux2, texcoord).rgb * 0.1;
     //color = L2Gamma(color) * 0.5;
 
-    //color = BRDFLighting(albedo.rgb, -nvP, -nvP, normalVisible, normalSurface, L2Gamma(F0), roughness, metallic);
+    //color = BRDFLighting(albedo.rgb, -nvP, -nvP, visibleNormal, texturedNormal, L2Gamma(F0), roughness, metallic);
 
-    //color = vec3(G(max(0.0, dot(normalSurface, normalize(sunPosition))), roughness) * G(max(0.0, dot(normalSurface, -nvP)), roughness)) * 0.01;
-    //color = F(F0, pow5(1.0 - max(0.0, dot(-nvP, normalSurface))));
+    //color = vec3(G(max(0.0, dot(texturedNormal, normalize(sunPosition))), roughness) * G(max(0.0, dot(texturedNormal, -nvP)), roughness)) * 0.01;
+    //color = F(F0, pow5(1.0 - max(0.0, dot(-nvP, texturedNormal))));
+
+    //color = sunDirectLight;
 
     albedo.a = 1.0;
+
+    //color = vec3(sdfShadow * albedo.rgb);
+
     //color = indirect * 0.1;
     //color = indirect;//L2Gamma(texture2D(gaux2, texcoord * GI_Rendering_Scale).rgb) * 0.1;
     //color = texture2D(gaux2, texcoord * 0.5).rgb;
 
     //color = L2Gamma(shading.rgb) * 0.01;
 
-    //color = vec3(sdfShadow);
     //color = sss;
-    //color = vec3(ao) * 0.01;
+    //color = vec3(ambientOcclusion) * 0.01;
     //color = albedo.rgb / maxComponent(albedo.rgb) * getLum(albedo.rgb) * (pow2(1.0 - maxComponent(albedo.rgb)) * 0.99 + 0.01);
     //color = vec3(dot(direction + rayStart))
     //color = gi * 1.0;
     //color = indirect;// * getLum(albedo.rgb) * 1.0;// * invPi * invPi;
 
     //vec3 direction = vec3(cos(2.0 * Pi * 0.5), sin(2.0 * Pi * 0.5), 0.0);
-    //vec3 worldNormal = mat3(gbufferModelViewInverse) * normalSurface;
+    //vec3 worldNormal = mat3(gbufferModelViewInverse) * texturedNormal;
     //color = vec3(dot(direction, worldNormal));
 
-    //color = vec3(ComputeCoarseAO(vP.xyz, normalSurface)) * 0.1;
+    //color = vec3(ComputeCoarseAO(vP.xyz, texturedNormal)) * 0.1;
     //color *= Extinction(500.0, viewLength);
     //color += InScattering(vec3(0.0, cameraPosition.y - 63.0, 0.0), normalize(wP.xyz), sP, 500.0, viewLength, 0.76, dot(normalize(wP.xyz), sP));
+    //color = vec3(ambientOcclusion);
+
+    //color = vec3(dot(vec4(1.0/16777216.0, 1.0/65536.0, 1.0/256.0, 1.0), texture2D(gaux2, texcoord))) * 0.1;
+    //if(texcoord.x > 0.4) color = (vec3(texture(shadowtex1, texcoord).x) - color * 10.0) * 100.0;
+
+  //if(texcoord.x > 0.5)
+    //color = texture2D(gaux2, texcoord * 0.5).rgb;
   }else{
     albedo.a = 0.0;
 
@@ -1128,13 +1141,13 @@ void main() {
     vec3 atmoScatteringDay = vec3(0.0);
     vec3 atmoScatteringNight = vec3(0.0);
 
-    if(bool(step(tDay.x, 0.0))) atmoScatteringDay = CalculateInScattering(eyePosition, skyPosition, sP, 0.76, ivec2(16, 2), vec3(1.0, 1.0, 0.3));
-    if(bool(step(tNight.x, 0.0))) atmoScatteringNight = CalculateInScattering(eyePosition, skyPosition, -sP, 0.76, ivec2(16, 2), vec3(1.0, 1.0, 0.0)) * 0.03;
+    if(bool(step(tDay.x, 0.0))) atmoScatteringDay = CalculateInScattering(eyePosition, skyPosition, sP, 0.76, ivec2(16, 2), vec3(1.0, 1.0, 0.4));
+    if(bool(step(tNight.x, 0.0))) atmoScatteringNight = CalculateInScattering(eyePosition, skyPosition, -sP, 0.76, ivec2(16, 2), vec3(1.0, 1.0, 0.0)) * 0.02;
 
     vec3 atmoScattering = atmoScatteringDay + atmoScatteringNight;
          atmoScattering = ApplyEarthSurface(atmoScattering, eyePosition, skyPosition, sP);
 
-    vec3 skyColor = atmoScattering;
+    vec3 skyColor = atmoScattering * 2.0;
 
     float moonDistance = 5.2;
     float moonSize = 1590e3;
@@ -1165,9 +1178,9 @@ void main() {
     vec4 moonTexture = texture2D(depthtex1, moonUV);
          moonTexture.rgb = rgb2L(moonTexture.rgb);
 
-    vec3 moonColor = Extinction(vec3(0.0), -sP);
+    vec3 moonColor = Extinction(vec3(0.0), -sP) * 0.4;
 
-    if(choseMoonPhase && tMoon.x > 0.0) skyColor += dot03(moonTexture.rgb) * step(0.05, moonTexture.a) * moonColor * step(tE.x, 0.0);
+    if(choseMoonPhase && tMoon.x > 0.0) skyColor += sum3(moonTexture.rgb) * step(0.05, moonTexture.a) * moonColor * step(tE.x, 0.0);
     //if(tMoon.x <= 0.0) skyColor = vec3(0.0, 1.0, 0.0);
     //skyColor += dot03(moonTexture.rgb) * float(floor(moonUV) == vec2(0.0));
 
@@ -1259,7 +1272,8 @@ void main() {
 
   //if(skyLightingMap < 0.001) color += vec3(1.0, 0.0, 0.0);
 
-  color = L2rgb(color);
+  color *= EncodeHDR;
+  color = encodeGamma(color);
 
   /*
   vec2 fragCoord = floor(texcoord * resolution);
@@ -1305,13 +1319,12 @@ void main() {
   //if(color.r > 0.0 || color.g > 0.0) color.b -= max(color.r, color.g);
   //if(color.r < 0.0 || color.g < 0.0) color.b -= min(color.r, color.g);
 */
-  color /= overRange;
+  //color /= overRange;
 
-  //color = mat3(gbufferModelViewInverse) * normalVisible;
+  //color = mat3(gbufferModelViewInverse) * visibleNormal;
 
-/* DRAWBUFFERS:05 */
-  gl_FragData[0] = vec4(albedo.rgb, 0.0);
-  //gl_FragData[1] = vec4(smoothness, metallic, 0.0, 1.0);
-  gl_FragData[1] = vec4(color, 1.0);
+/* DRAWBUFFERS:045 */
+  gl_FragData[0] = vec4(encodeGamma(albedo), 0.0);
+  gl_FragData[1] = vec4(viewLength / 544.0, 0.0, 0.0, 1.0);
+  gl_FragData[2] = vec4(color, 1.0);
 }
-                                                                                           

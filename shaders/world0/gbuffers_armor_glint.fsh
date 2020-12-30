@@ -1,4 +1,6 @@
-#version 120
+#version 130
+
+//#define Continuum2_Texture_Format
 
 uniform sampler2D texture;
 uniform sampler2D specular;
@@ -10,13 +12,7 @@ in vec3 normal;
 
 in vec4 color;
 
-vec3 nvec3(vec4 pos) {
-    return pos.xyz / pos.w;
-}
-
-vec4 nvec4(vec3 pos) {
-    return vec4(pos.xyz, 1.0);
-}
+#include "../libs/common.inc"
 
 vec2 normalEncode(vec3 n) {
     vec2 enc = normalize(n.xy) * (sqrt(-n.z*0.5+0.5));
@@ -44,7 +40,11 @@ void main() {
   speculars.r = clamp(speculars.r, 0.001, 0.999);
   speculars.b = 0.12;
 
+  float selfShadow = 1.0;
+  float emissive = 0.06;
+  vec4 lightmap = vec4(pack2x8(lmcoord), selfShadow, emissive, 1.0);
+
 /* DRAWBUFFERS:01 */
   gl_FragData[0] = albedo;
-  gl_FragData[1] = vec4(lmcoord, 0.0, 0.06);
+  gl_FragData[1] = lightmap;
 }

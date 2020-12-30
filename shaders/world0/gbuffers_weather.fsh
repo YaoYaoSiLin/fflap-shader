@@ -19,14 +19,26 @@ in vec4 color;
 #define Gen_TnR
 
 #include "../libs/biomes.glsl"
+//#include "../lib/packing.glsl"
+float pack2x8(in vec2 x){
+  float pack = dot(floor(x * 255.0), vec2(1.0, 256.0));
+        pack /= (1.0 + 256.0) * 255.0;
 
-vec3 nvec3(vec4 pos) {
-    return pos.xyz / pos.w;
+  return pack;
 }
 
-vec4 nvec4(vec3 pos) {
-    return vec4(pos.xyz, 1.0);
+float pack2x8(in float x, in float y){return pack2x8(vec2(x, y));}
+
+vec2 unpack2x8(in float x){
+  x *= 65536.0 / 256.0;
+  vec2 pack = vec2(fract(x), floor(x));
+       pack *= vec2(256.0 / 255.0, 1.0 / 255.0);
+
+  return pack;
 }
+
+float unpack2x8X(in float packge){return (256.0 / 255.0) * fract(packge * (65536.0 / 256.0));}
+float unpack2x8Y(in float packge){return (1.0 / 255.0) * floor(packge * (65536.0 / 256.0));}
 
 vec2 normalEncode(vec3 n) {
     vec2 enc = normalize(n.xy) * (sqrt(-n.z*0.5+0.5));
@@ -49,13 +61,18 @@ void main() {
   if(albedo.a < 0.2) discard;
   albedo.a = 1.0;
 
-  float mask = 250.0 / 255.0;
+  float selfShadow = 1.0;
+  float emissive = 0.0;
+  vec4 lightmap = vec4(pack2x8(lmcoord), selfShadow, emissive, 1.0);
 
   vec2 encodeNormal = normalEncode(normal);
 
+  float mask = 250.0 / 255.0;
+  float specularPackge = pack2x8(vec2(0.01));
+
 /* DRAWBUFFERS:0123 */
   gl_FragData[0] = vec4(albedo.rgb, 1.0);
-  gl_FragData[1] = vec4(lmcoord.xy, mask, 0.0);
-  gl_FragData[2] = vec4(encodeNormal, 0.01, 1.0);
-  gl_FragData[3] = vec4(encodeNormal, 0.01, 1.0);
+  gl_FragData[1] = lightmap;
+  gl_FragData[2] = vec4(encodeNormal, mask, 1.0);
+  gl_FragData[3] = vec4(encodeNormal, specularPackge, 1.0);
 }

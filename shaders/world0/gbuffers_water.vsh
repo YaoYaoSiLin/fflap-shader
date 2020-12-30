@@ -28,17 +28,7 @@ out vec4 biomesColor;
 
 #define Gen_Water_Color
 
-#ifdef Enabled_TAA
-  uniform int frameCounter;
-
-  uniform float viewWidth;
-  uniform float viewHeight;
-
-  vec2 resolution = vec2(viewWidth, viewHeight);
-  vec2 pixel = 1.0 / vec2(viewWidth, viewHeight);
-
-  #include "../libs/jittering.glsl"
-#endif
+uniform vec2 jitter;
 
 #include "../libs/common.inc"
 #include "../libs/biomes.glsl"
@@ -98,8 +88,14 @@ void main() {
   sunLightingColorRaw = (CalculateSky(normalize(sunPosition), sP, 0.0, 0.7));
   skyLightingColorRaw = (CalculateSky(normalize(upPosition), sP, 0.0, 1.0));
 
-  gl_Position = gl_ProjectionMatrix * gl_ModelViewMatrix * gl_Vertex;
+  gl_Position = gl_ModelViewMatrix * gl_Vertex;
+
+  //if(bool(step(dot(normalize(-vP), normal), 1e-5))) 
+  gl_Position.z += 0.05 * 0.05 * step(dot(normalize(-vP), normal), 1e-5);
+
+  gl_Position = gl_ProjectionMatrix * gl_Position;
+
   #ifdef Enabled_TAA
-  gl_Position.xy += jittering * gl_Position.w * pixel * 0.5;
+    gl_Position.xy += jitter * 2.0 * gl_Position.w;
   #endif
 }

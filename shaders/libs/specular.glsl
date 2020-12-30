@@ -24,7 +24,7 @@ vec3 P2UV(in vec3 P){
 
 #define SSR_Type SSR_3D
 
-vec4 rayMarching(in vec3 rayDirection, in vec3 viewPosition, out vec3 hitPosition){
+vec4 rayMarching(in vec3 rayDirection, in vec3 viewPosition){
   vec2 hitUV = vec2(0.0);
 
   int count;
@@ -32,12 +32,9 @@ vec4 rayMarching(in vec3 rayDirection, in vec3 viewPosition, out vec3 hitPositio
   int steps = 20;
   float invsteps = 1.0 / float(steps);
 
-  float dither = R2sq(texcoord * resolution * SSR_Rendering_Scale);
+  //rayDirection *= 20.0 * invsteps;
 
-  //rayDirection *= 0.5 + dither * 0.5;
-  //rayDirection *= mix(dither, 0.5, 0.7);
-
-  float rayEnd = 600.0;
+  float rayEnd = 400.0;
   float rayStep = pow(rayEnd, invsteps);
 
   vec3 testPosition = viewPosition;
@@ -52,16 +49,13 @@ vec4 rayMarching(in vec3 rayDirection, in vec3 viewPosition, out vec3 hitPositio
     vec3 samplePosition = nvec3(gbufferProjectionInverse * vec4(vec3(uv, sampleDepth) * 2.0 - 1.0, 1.0));
 
     float testDepth = linearizeDepth(P2UV(testPosition).z);
-    float forntDepth = linearizeDepth(sampleDepth);
+    float frontDepth = linearizeDepth(sampleDepth);
 
-    if(testDepth > forntDepth){
+    if(testDepth > frontDepth){
       float backDepth = linearizeDepth(sampleDepth + 0.001);
 
-      if(testDepth - forntDepth < (1.0 + forntDepth * 256.0 * float(count + 1)) * (1.0 / 2048.0)){
-        hitUV = uv;
-        hitPosition = testPosition;
-        count++;
-        //if(count > 1) break;
+      if(testDepth - frontDepth < (1.0 + frontDepth * 256.0) * (1.0 / 2048.0)){
+        return vec4(samplePosition, 1.0);
       }
 
       testPosition -= rayDirection;
@@ -70,34 +64,33 @@ vec4 rayMarching(in vec3 rayDirection, in vec3 viewPosition, out vec3 hitPositio
       rayDirection *= rayStep;
     }
   }
-  return vec4(hitUV, 0.0, 0.0);
+
+  return vec4(vec3(0.0), 1.0);
 }
 
-vec4 raytrace(in vec3 viewVector, in vec3 rayDirection, out vec3 hitPosition, in float dither){
+vec4 ScreenSpaceReflection(in vec3 viewVector, in vec3 rayDirection, out vec3 hitPosition, in float dither){
   vec4 color = vec4(0.0);
 
   vec3 testPoint = viewVector;
 
-  rayDirection *= mix(dither, 0.5, 0.7);
+  rayDirection *= mix(dither, 1.0, 0.7071) * 0.5;
 
-  vec4 ray = rayMarching(rayDirection, testPoint, hitPosition);
+  vec4 rayPosition = rayMarching(rayDirection, testPoint);
 
-  if(ray.x > 0.0 && ray.y > 0.0) {
-    /*
-    ray.xy = round(ray.xy * resolution) * pixel;
+  vec2 coord = nvec3(gbufferProjection * rayPosition).xy * 0.5 + 0.5;
 
-    for(int i = 0; i < 4; i++){
-      for(int j = 0; j < 4; j++){
-        vec2 offset = vec2(i, j) - 1.5;
-        float weight = gaussianBlurWeights(offset+0.001);
+  if(floor(coord) == vec2(0.0)) {
+    hitPosition = rayPosition.xyz;
 
-        color += texture2D(gaux2, ray.xy + offset * pixel);
-       }
-    }
+    color = texture2D(gaux2, coord.xy);
+    color.rgb = decodeGamma(color.rgb) * decodeHDR;
 
-    color /= 16.0;
-*/
-    color = texture2D(gaux2, ray.xy);
+    vec2 specularPackge = unpack2x8(texture(composite, coord.xy).b);
+  	float smoothness = specularPackge.x; float metallic = specularPackge.y;
+    vec2 lightmapPackge = unpack2x8(texture(gdepth, coord.xy).x);
+    float torchLightMap = lightmapPackge.x; float skyLightMap = lightmapPackge.y;
+
+    if(bool(step(0.5, metallic))) color.rgb = decodeGamma(texture2D(gcolor, coord.xy).rgb) * skyLightingColorRaw * step(0.7, skyLightMap);
 
     color.a = 1.0;
   }

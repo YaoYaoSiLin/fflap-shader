@@ -16,6 +16,7 @@ uniform vec3 cameraPosition;
 
 uniform mat4 gbufferModelView;
 uniform mat4 gbufferModelViewInverse;
+uniform mat4 gbufferProjection;
 
 out float id;
 out float spruce_leaves;
@@ -35,17 +36,11 @@ out vec4 color;
 
 #define Enabled_TAA
 
-#ifdef Enabled_TAA
-  uniform int frameCounter;
+uniform vec2 jitter;
 
-  uniform float viewWidth;
-  uniform float viewHeight;
-
-  vec2 resolution = vec2(viewWidth, viewHeight);
-  vec2 pixel = 1.0 / vec2(viewWidth, viewHeight);
-
-  #include "../libs/jittering.glsl"
-#endif
+vec3 nvec3(in vec4 x){
+  return x.xyz / x.w;
+}
 
 #define GetBlockID(x, id) bool(step(id - 0.5, x) * step(x, id + 0.5) * id)
 
@@ -222,8 +217,22 @@ void main() {
   //position.xyz -= cameraPosition;
   //position = gbufferModelView * position;
 
+  //if(mc_Entity.x == 91) position.y += 1.0;
+
   gl_Position = gl_ProjectionMatrix * gl_ModelViewMatrix * position;
+  /*
+  vec3 vpos = (gl_ProjectionMatrix * gl_ModelViewMatrix * position).xyz;
+
+  float magnitude = length(vpos.xyz);
+  vec3 normalizedVertPos = vpos.xyz / magnitude;
+
+  vpos.xy = normalizedVertPos.xy / (1.0 + normalizedVertPos.z);
+  //vpos.y = -vpos.y;
+
+  gl_Position.xy = vpos.xy;
+  */
+
   #ifdef Enabled_TAA
-  gl_Position.xy += jittering * gl_Position.w * pixel * 0.5;
+    gl_Position.xy += jitter * 2.0 * gl_Position.w;
   #endif
 }

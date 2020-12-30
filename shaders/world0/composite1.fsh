@@ -14,6 +14,10 @@ uniform sampler2D shadowcolor1;
 uniform float viewWidth;
 uniform float viewHeight;
 uniform float aspectRatio;
+
+uniform float biomeTemperature;
+uniform float biomeRainFall;
+
 uniform int frameCounter;
 
 uniform vec3 sunPosition;
@@ -26,6 +30,7 @@ uniform mat4 gbufferModelViewInverse;
 uniform mat4 gbufferModelView;
 uniform mat4 shadowModelView;
 uniform mat4 shadowProjection;
+uniform mat4 shadowProjectionInverse;
 
 in vec2 texcoord;
 
@@ -579,6 +584,49 @@ void CalculateFarVolumetric(inout vec4 volumetric, in vec3 rayOrigin, in vec3 ra
   //if(length(testPoint) > length(wP) * tA.y) volumetric = vec4(0.0);
 }
 #endif
+
+void CalculateNearVolumetric(inout vec4 volumetric, in vec4 rayOrigin, in vec3 rayDirection, in float dither){
+  float mu = dot(normalize(rayOrigin.xyz), rayDirection);
+  float phaseM = HG(mu, 0.76);
+
+  int steps = 4;
+  float invsteps = 1.0 / float(steps);
+
+  vec4 rayStep = vec4(normalize(rayOrigin.xyz), 0.0) * length(rayOrigin.xyz) * invsteps;
+  vec4 rayStart = rayOrigin - rayStep * (dither + 0.05);
+
+  vec3 m = vec3(0.0);
+  vec3 r = vec3(0.0);
+
+  vec3 Tm = bM * 10.0;
+  vec3 Tr = bR * 10.0;
+
+  for(int i = 0; i < steps; i++){
+    float distort = 0.0;
+    vec3 shadowCoord = wP2sP(rayStart, distort);
+
+    float visibility = step(shadowCoord.z, texture(shadowtex0, shadowCoord.xy).x + shadowPixel);
+
+    float currentmu = dot(rayDirection, normalize(rayStart.xyz));
+    float phaseM = HG(currentmu, 0.76);
+    float phaseR = 0.0596831 * (1.0 + currentmu * currentmu);
+
+    vec3 scattering = 1.0 - exp(-(Tm + Tr) * length(rayStart.xyz));
+    //vec3 extinction = vec3(step(100.0));//exp(-bM * 100.0 * );
+
+    m += visibility * scattering * phaseM;
+
+    rayStart -= rayStep;
+  }
+
+  vec3 scattering = m;
+       scattering *= invsteps * sunLightingColorRaw;
+
+  volumetric.rgb += scattering;
+
+  //vec3 m = (sunLightingColorRaw) * scattering * 40.0;
+}
+
 void main() {
   vec2 coord = texcoord - jittering * pixel * 1.0;
 	vec4 vP = GetViewPosition(coord, depthtex0);
@@ -595,7 +643,17 @@ void main() {
   //dither = mix(dither, 1.0, 0.3);
 
   float isSky = step(0.9999, texture(depthtex0, texcoord).x);
+  /*
+  float isSky = 1.0;
 
+  for(float i = -2.0; i <= 2.0; i += 1.0){
+    for(float j = -2.0; j <= 2.0; j += 1.0){
+      isSky = min(isSky, texture(depthtex0, texcoord + vec2(i, j) * pixel * LightShaft_Quality).x);
+    }
+  }
+
+  isSky = step(0.9999, isSky);
+  */
   vec4 volumetric = vec4(vec3(0.0f), 1.0f);
 
   vec2 t = RaySphereIntersection(vec3(0.0, rE, 0.0), normalize(wP.xyz), vec3(0.0), rA);
@@ -603,7 +661,9 @@ void main() {
 
   vec3 direction = wP.xyz * mix(1.0, t.y, isSky);
 
-  CalculateFarVolumetric(volumetric, vec3(0.0, (cameraPosition.y - 63.0) * 0.0, 0.0), normalize(wP.xyz), lightingDirection, length(direction), dither);
+  //if(bool(1.0 - isSky))
+  CalculateNearVolumetric(volumetric, wP, lightingDirection, dither);
+  //CalculateFarVolumetric(volumetric, vec3(0.0, (cameraPosition.y - 63.0) * 0.0, 0.0), normalize(wP.xyz), lightingDirection, length(direction), dither);
 
   //volumetric.rgb = InScattering(vec3(0.0, cameraPosition.y, 0.0), normalize(wP.xyz), lightingDirection, 1500.0, length(vP.xyz) * 100.0, 0.76, dot(lightingDirection, normalize(wP.xyz)));
   //volumetric.rgb *= sunLightingColorRaw;

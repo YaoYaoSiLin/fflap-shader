@@ -5,39 +5,35 @@
 const float shadowDistance = 140.0;
 
 uniform sampler2D texture;
-uniform sampler2D noisetex;
-
-uniform sampler2D depthtex0;
-uniform sampler2D depthtex1;
-uniform sampler2D shadowtex0;
-uniform sampler2D shadowtex1;
+uniform sampler2D specular;
 
 uniform mat4 gbufferModelView;
 uniform mat4 gbufferModelViewInverse;
-uniform mat4 shadowModelView;
-uniform mat4 shadowProjection;
-uniform mat4 shadowProjectionInverse;
 
 uniform vec3 shadowLightPosition;
 
-uniform float viewWidth;
-uniform float viewHeight;
 uniform float far;
 
-in float shadowPass;
-in float isWater;
-in float isLava;
-in float blockDepth;
+in float isSphereMap;
+in float sphereMapDepth;
+in vec4 sphereViewPosition;
+
+out float blockID;
 
 in vec2 texcoord;
 in vec2 lmcoord;
 
-in vec3 worldNormal;
-in vec3 vP;
+in vec3 world_normal;
 
 in vec4 color;
 
 const float Pi = 3.14159265;
+
+#define pow5(x) (x*x*x*x*x)
+
+float saturate(in float x){
+  return clamp(x, 0.0, 1.0);
+}
 
 vec3 nvec3(vec4 pos) {
     return pos.xyz / pos.w;
@@ -47,98 +43,62 @@ vec4 nvec4(vec3 pos) {
     return vec4(pos.xyz, 1.0);
 }
 
-vec2 normalEncode(vec3 n) {
-    vec2 enc = normalize(n.xy) * (sqrt(-n.z*0.5+0.5));
-    enc = enc*0.5+0.5;
-    return enc;
+vec3 F(vec3 F0, float cosTheta){
+ return F0 + (1.0 - F0) * cosTheta;
 }
+
+vec3 F(vec3 F0, vec3 V, in vec3 N){
+  float cosTheta = pow5(1.0 - saturate(dot(V, N)));
+
+ return F(F0, cosTheta);
+}
+
+
+#define CalculateMaskID(id, x) bool(step(id - 0.5, x) * step(x, id + 0.5))
 
 void main() {
 	vec4 tex = texture2D(texture, texcoord) * color;
 
-  //if(!gl_FrontFacing) discard;
+  if(!gl_FrontFacing || tex.a < 0.004) discard;
 
-  float maxDistance = 1.414;
+  float maxDistance = 1.0;
 
-	if(isWater > 0.5) {
-  //  tex.rgb = vec3(1.0, 0.0, 0.0);
-  //  tex.a = 0.05;
+  vec3 worldLightVector = mat3(gbufferModelViewInverse) * normalize(shadowLightPosition);
+
+	if(CalculateMaskID(8.0, blockID)) {
     tex = color;
-    //tex.a *= 0.01;
-    maxDistance = (255.0);
+    maxDistance = (16.0);
 	}
 
-  vec4 uv = shadowProjection * shadowModelView * vec4(vP, 1.0);
-       uv /= uv.w;
-       uv = uv * 0.5 + 0.5;
-       uv.xy = gl_FragCoord.xy;
+  if(CalculateMaskID(106.0, blockID) || CalculateMaskID(160.0, blockID)){
+    maxDistance = 0.125;
+  }
+  /*
+  if(!bool(isSphereMap)){
+    float metallic = texture2D(specular, texcoord).g;
 
-  float depth0 = texture2D(shadowtex0, uv.xy).x;
-  float depth1 = texture2D(shadowtex1, uv.xy).x;
+    vec3 F0 = mix(vec3(max(0.02, metallic)), tex.rgb, step(0.5, metallic));
+    vec3 f = F(F0, worldLightVector, world_normal);
 
-  vec4 p0 = shadowProjectionInverse * vec4(vec3(uv.xy, depth0) * 2.0 - 1.0, 1.0);
-  vec4 p1 = shadowProjectionInverse * vec4(vec3(uv.xy, depth1) * 2.0 - 1.0, 1.0);
-
-  float depth = length(p0.xyz - p1.xyz);
-
+    tex.rgb *= 1.0 - f;
+  }
+  */
   vec3 scatteringcoe = vec3(1.0);
        scatteringcoe = scatteringcoe * Pi * (tex.a * tex.a);
 
-  //tex.rgb *= step(depth0, depth1);//exp(-depth * scatteringcoe);
+  vec2 lightMap = vec2(lmcoord.x, lmcoord.y);
 
-  //tex.rgb *= 1.0 - isLava;
-  /*
-  vec3 worldLightPosition = mat3(gbufferModelViewInverse) * normalize(shadowLightPosition);
-  float ndotl = max(0.0, dot(worldLightPosition, worldNormal));
-  tex.rgb *= min((ndotl * ndotl * 32.0), 1.0);
+  float data1A = dot(floor(lightMap * 15.0), vec2(1.0, 16.0)) / 255.0;
+  if(!bool(isSphereMap)) data1A = maxDistance / 16.0;
 
-  float scatteringFactor = tex.a * blockDepth * Pi;
-  vec3 absorption = scatteringFactor * (1.0 - tex.rgb);
+  vec3 data1RGB = mix(world_normal * 0.5 + 0.5, sphereViewPosition.xyz, step(0.5, isSphereMap));
 
-  //scatteringFactor = min(exp(-scatteringFactor), 1.0);
-  absorption = exp(-tex.a * Pi * blockDepth * (1.0 - tex.rgb));
-  */
+  float ndotl = dot(worldLightVector, world_normal);
 
-  //tex.rgb = absorption;
-  //tex.rgb *= scatteringFactor;
+  vec4 data0 = tex;
+  data0.a = mix(data0.a, ndotl * 0.5 + 0.5, step(0.5, isSphereMap));
 
-
-  //if(length(vP.xy) < 10.0) discard;
-
-  //scatteringFactor = step(tex.a, 0.99);
-  //tex.rgb *= clamp(pow2(dot(normalize(normalize(shadowLightPosition) + normal), (normal))), 0.0, 1.0);
-  //tex.rgb = absorption;
-  //tex.rgb *= 1.0 - scatteringFactor;
-
-  //float receiver = (-vP.z) * 0.5 + 0.5 - 0.001;
-
-  //vec3 uv = nvec3(shadowProjection * nvec4(vP)).xyz * 0.5 + 0.5;
-
-  float blocker = gl_FragCoord.z;
-  //if(blocker > 0.996) tex.rgba = vec4(vec3(0.0), 1.0);
-
-  //float penumbra = (receiver - blocker) / blocker;
-
-  //if(isWater > 0.5){
-    //tex.rgb *= clamp(penumbra, 0.0, 1.0);
-  //}
-
-  //vec3 uv = shado
-
-  //tex.rgb = gl_FragCoord.zzz * 2.0 - 1.0;
-  //if(penumbra > 0.1) tex.rgb = vec3(1.0, 0.0, 0.0);
-  //if(length(vPsolid) > 10.0) tex.rgb = vec3(1.0, 0.0, 0.0);
-
-	//tex.rgb *= pow(clamp(dot(normal, mat3(gbufferModelViewInverse) * normalize(shadowLightPosition)) * 0.5 + 0.5, 0.0, 1.0), 0.2);
-  //tex.rgb = mix(tex.rgb, vec3(0.0), tex.a);
-
-  vec3 normal = worldNormal;
-  if(gl_FragCoord.z > 0.9999) normal = vec3(0.0);
-       //normal = mat3()
-       //normal = mat3()
-       //normal -= normal * 0.05;
-
-/* DRAWBUFFERS:01 */
-	gl_FragData[0] = vec4(normal * 0.5 + 0.5, tex.a);
-	gl_FragData[1] = vec4(tex.rgb, maxDistance / 255.0);
+  /* DRAWBUFFERS:01 */
+	gl_FragData[0] = data0;
+	gl_FragData[1] = vec4(data1RGB, data1A);
 }

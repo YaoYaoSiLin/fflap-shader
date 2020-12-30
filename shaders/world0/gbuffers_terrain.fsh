@@ -85,32 +85,32 @@ vec2 normalEncode(vec3 n) {
 #define tileResolution sqrt(textureSize(normals, 0).x) * 2.0
 #endif
 
-vec2 OffsetCoord(in vec2 coord, in vec2 offset, in ivec3 tileSize){
-  vec2 textureSize = float(tileSize.z) / vec2(tileSize.xy);
+vec2 OffsetCoord(in vec2 coord, in vec2 offset, in ivec3 size){
+  vec2 tileSize = float(size.z) / vec2(size.xy);
 
-	vec2 offsetCoord = coord + mod(offset.xy, textureSize);
+	vec2 offsetCoord = coord + mod(offset.xy, tileSize);
 
-	vec2 minCoord = vec2(coord.x - mod(coord.x, textureSize.x), coord.y - mod(coord.y, textureSize.y));
-	vec2 maxCoord = minCoord + textureSize;
-/*
+	vec2 minCoord = vec2(coord.x - mod(coord.x, tileSize.x), coord.y - mod(coord.y, tileSize.y));
+	vec2 maxCoord = minCoord + tileSize;
+  /*
   if(offsetCoord.x < minCoord.x){
-    offsetCoord.x += textureSize.x;
+    offsetCoord.x += tileSize.x;
   }
   if(maxCoord.x < offsetCoord.x){
-    offsetCoord.x -= textureSize.x;
+    offsetCoord.x -= tileSize.x;
   }
   if(offsetCoord.y < minCoord.y){
-    offsetCoord.y += textureSize.y;
+    offsetCoord.y += tileSize.y;
   }
   if(maxCoord.y < offsetCoord.y){
-    offsetCoord.y -= textureSize.y;
+    offsetCoord.y -= tileSize.y;
   }
-*/
+  */
 
-  offsetCoord.x += textureSize.x * step(offsetCoord.x, minCoord.x);
-  offsetCoord.x -= textureSize.x * step(maxCoord.x, offsetCoord.x);
-  offsetCoord.y += textureSize.y * step(offsetCoord.y, minCoord.y);
-  offsetCoord.y -= textureSize.y * step(maxCoord.y, offsetCoord.y);
+  offsetCoord.x += tileSize.x * step(offsetCoord.x, minCoord.x);
+  offsetCoord.x -= tileSize.x * step(maxCoord.x, offsetCoord.x);
+  offsetCoord.y += tileSize.y * step(offsetCoord.y, minCoord.y);
+  offsetCoord.y -= tileSize.y * step(maxCoord.y, offsetCoord.y);
 
 	return offsetCoord;
 }
@@ -122,26 +122,35 @@ vec2 OffsetCoord(in vec2 coord, in vec2 offset, in vec2 textureSize){
 	vec2 minCoord = vec2(coord.x - mod(coord.x, textureSize.x), coord.y - mod(coord.y, textureSize.y));
 	vec2 maxCoord = minCoord + textureSize;
 
+  //offsetCoord = floor(offsetCoord * vec2(atlasSize)) / vec2(atlasSize);
+
   offsetCoord.x += textureSize.x * step(offsetCoord.x, minCoord.x);
   offsetCoord.x -= textureSize.x * step(maxCoord.x, offsetCoord.x);
   offsetCoord.y += textureSize.y * step(offsetCoord.y, minCoord.y);
   offsetCoord.y -= textureSize.y * step(maxCoord.y, offsetCoord.y);
+
+  //offsetCoord = floor(offsetCoord * vec2(atlasSize)) / vec2(atlasSize);
 
 	return offsetCoord;
 }
 
 vec2 ParallaxMapping(in vec2 coord, in vec3 vP, in float distance){
   int steps = POM_Steps;
-  float istep = 1.0 / steps;
+  float invsteps = 1.0 / steps;
 
   float d = clamp((-distance + 32.0 - 2.0) / 8.0, 0.0, 1.0);
 
-  if(texture2D(normals, coord).a < 1.0 && distance < 32.0){
-    vec2 offset = vP.xy / (vP.z) * istep * d;
-         offset *= 0.0078;
+  //coord = floor(coord * vec2(atlasSize)) / vec2(atlasSize);
+
+
+  //texture2D(normals, coord, 0).a < 1.0 &&
+  if(distance < 32.0){
+    vec2 offset = vP.xy / (vP.z) * invsteps * d;
+         offset *= 0.0625;
+         offset *= 0.115;
          offset /= vec2(atlasSize.x / atlasSize.y, 1.0);
 
-    float layerHeight = istep;
+    float layerHeight = invsteps;
 
     float height = 0.0;
     float heightMapLast = 0.0;
@@ -344,7 +353,7 @@ void main() {
 
   if(speculars.r + speculars.g + speculars.b == speculars.r * 3.0) speculars.rgb = vec3(speculars.r, 0.0, 0.0);
   speculars.r = clamp(speculars.r, 0.001, 0.999);
-  speculars.b = 0.0;
+  //speculars.b *= 0.06;
   //speculars.b *= 0.12;
 
   //#if MC_VERSION > 11202
@@ -353,23 +362,21 @@ void main() {
 
   vec4 normalTexture = texture2D(normals, uv);
 
-  vec3 surfaceNormal = normalTexture.rgb * 2.0 - 1.0;
-  surfaceNormal = normalize(tbnMatrix * surfaceNormal);
-  if(backFace) surfaceNormal = -surfaceNormal;
+  vec3 texturedNormal = normalTexture.rgb * 2.0 - 1.0;
+  texturedNormal = normalize(tbnMatrix * texturedNormal);
+  if(backFace) texturedNormal = -texturedNormal;
 
   #if MC_VERSION > 11404
-  if(isBlockEntity > 0.5) surfaceNormal.rgb = normalBase;
+  if(isBlockEntity > 0.5) texturedNormal.rgb = normalBase;
   #endif
 
-  //vec3 visibleNormal = surfaceNormal - (surfaceNormal - normal) * step(-0.15, dot(normalize(vP), surfaceNormal));
+  //vec3 visibleNormal = texturedNormal - (texturedNormal - normal) * step(-0.15, dot(normalize(vP), texturedNormal));
   vec3 visibleNormal = vec3(0.0);
-  vec3 blockNormal = normalBase;
-
-  float mask = id / 255.0;
+  vec3 flatNormal = normalBase;
 
   #ifdef winter_mode
   if(jingle){
-    surfaceNormal = normal;
+    texturedNormal = normal;
     visibleNormal = normal;
     selfShadow = 1.0;
     speculars.rgb = jingleSpecular;
@@ -385,13 +392,13 @@ void main() {
 
   vec4 snowTexture = vec4(0.0);
        snowTexture.rgb = texture2D(gaux2, texcoordWeather).rgb;
-       snowTexture.a = clamp01(pow5(dot(normalize(upPosition), surfaceNormal) + 0.5));
+       snowTexture.a = clamp01(pow5(dot(normalize(upPosition), texturedNormal) + 0.5));
 
   if(worldNormal.y > 0.5){
     snowTexture.a = 1.0;
   }else if(worldNormal.y > -0.1) {
     vec4 snowTextureSide = texture2D(gaux2, texcoordWeather + vec2(0.5, 0.0));
-         snowTextureSide.a *= clamp01(1.0 + dot(surfaceNormal, normalize(upPosition)));
+         snowTextureSide.a *= clamp01(1.0 + dot(texturedNormal, normalize(upPosition)));
     snowTexture.rgb = mix(snowTexture.rgb, snowTextureSide.rgb, snowTextureSide.a);
     snowTexture.a = max(snowTexture.a, snowTextureSide.a);
   }
@@ -400,8 +407,8 @@ void main() {
   snowTexture.a *= 1.0 - smoothstep(0.4666, 0.6666, lmcoord.x);
 
   albedo.rgb = mix(albedo.rgb, snowTexture.rgb, snowTexture.a);
-  vec3 normalFlat = surfaceNormal - normal;
-  surfaceNormal -= normalFlat * 0.33 * snowTexture.a;
+  vec3 normalFlat = texturedNormal - normal;
+  texturedNormal -= normalFlat * 0.33 * snowTexture.a;
   normalFlat = visibleNormal - normal;
   visibleNormal -= normalFlat * 0.33 * snowTexture.a;
   speculars.b *= 1.0 - snowTexture.a;
@@ -419,14 +426,24 @@ void main() {
   //bool isEndPortal = int(round(id)) == 18;
   //if(isLeaves) albedo.rgb = vec3(1.0);
 
-  //if(texture2D(normals, texcoord).x < 0.01) surfaceNormal = blockNormal;
+  //if(texture2D(normals, texcoord).x < 0.01) texturedNormal = blockNormal;
 
-  surfaceNormal.xy = normalEncode(surfaceNormal);
-  blockNormal.xy = normalEncode(blockNormal);
+
+  float lightmapPackge = pack2x8(lmcoord.xy);
+  float emissve = speculars.b * 0.06;
+
+  vec4 lightmap = vec4(lightmapPackge, selfShadow, emissve, 1.0);
+
+  flatNormal.xy = normalEncode(flatNormal);
+  texturedNormal.xy = normalEncode(texturedNormal);
+
+  float material = round(id) / 255.0;
+
+  float specularPackge = pack2x8(speculars.rg);
 
 /* DRAWBUFFERS:0123 */
   gl_FragData[0] = albedo;
-  gl_FragData[1] = vec4(lmcoord, mask, speculars.b);
-  gl_FragData[2] = vec4(blockNormal.xy, speculars.r, selfShadow);
-  gl_FragData[3] = vec4(surfaceNormal.xy, speculars.g, 1.0);
+  gl_FragData[1] = lightmap;
+  gl_FragData[2] = vec4(flatNormal.xy, material, 1.0);
+  gl_FragData[3] = vec4(texturedNormal.xy, specularPackge, 1.0);
 }

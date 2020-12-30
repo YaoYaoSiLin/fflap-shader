@@ -25,15 +25,7 @@ in vec3 vP;
 
 in vec4 color;
 
-#define CalculateMaskID(id, x) step(id - 0.5, x) * step(x, id + 0.5)
-
-vec3 nvec3(vec4 pos) {
-    return pos.xyz / pos.w;
-}
-
-vec4 nvec4(vec3 pos) {
-    return vec4(pos.xyz, 1.0);
-}
+#include "../libs/common.inc"
 
 vec2 normalEncode(vec3 n) {
     vec2 enc = normalize(n.xy) * (sqrt(-n.z*0.5+0.5));
@@ -45,10 +37,7 @@ void main() {
   vec4 albedo = texture2D(texture, texcoord) * color;
   albedo.rgb = mix(albedo.rgb, entityColor.rgb, entityColor.a);
 
-  vec3 nvP = normalize(vP);
-  bool backFace = dot(normal, nvP) > 0.0;
-
-  if(albedo.a < 0.3) discard;
+  if(albedo.a < 0.2) discard;
   albedo.a = 1.0;
 
   vec4 speculars = texture2D(specular, texcoord);
@@ -65,22 +54,15 @@ void main() {
 
   mat3 tbnMatrix = mat3(tangent, binormal, normal);
 
-  vec3 normalBase = normal;
+  vec3 flatNormal = normal;
 
-  vec3 normalSurface = texture2D(normals, texcoord).xyz * 2.0 - 1.0;
-       normalSurface = normalize(tbnMatrix * normalSurface);
+  vec3 texturedNormal = texture2D(normals, texcoord).xyz * 2.0 - 1.0;
+       texturedNormal = normalize(tbnMatrix * texturedNormal);
 
-  if(backFace) {
-    normalSurface = -normalSurface;
-    normalBase = -normalBase;
+  if(!gl_FrontFacing) {
+    texturedNormal = -texturedNormal;
+    flatNormal = -flatNormal;
   }
-
-  vec3 normalVisible = normalSurface - (normalSurface - normalBase) * step(-0.15, dot(nvP, normalSurface));
-
-  float selfShadow = step(0.1, dot(normalize(shadowLightPosition), normalBase));
-
-  normalSurface.xy = normalEncode(normalSurface);
-  normalVisible.xy = normalEncode(normalBase);
 
   float mask = 249.0;
 
@@ -97,9 +79,17 @@ void main() {
   mask /= 255.0;
   //discard;
 
+  float emissive = speculars.b;
+  vec4 lightmap = vec4(pack2x8(lmcoord), 1.0, emissive, 1.0);
+
+  float specularPackge = pack2x8(speculars.rg);
+
+  vec2 encodeNormal0 = normalEncode(flatNormal);
+  vec2 encodeNormal1 = normalEncode(texturedNormal);
+
   /* DRAWBUFFERS:0123 */
   gl_FragData[0] = albedo;
-  gl_FragData[1] = vec4(lmcoord, mask, speculars.b);
-  gl_FragData[2] = vec4(normalVisible.xy, speculars.r, selfShadow);
-  gl_FragData[3] = vec4(normalSurface.xy, speculars.g, 1.0);
+  gl_FragData[1] = lightmap;
+  gl_FragData[2] = vec4(encodeNormal0, mask, 1.0);
+  gl_FragData[3] = vec4(encodeNormal1, specularPackge, 1.0);
 }

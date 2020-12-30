@@ -5,7 +5,7 @@
 
 #define SHADOW_MAP_BIAS 0.9
 
-const int   shadowMapResolution     = 2048;   //[512 768 1024 1536 2048 3072 4096]
+const int   shadowMapResolution     = 2560;   //[512 768 1024 1536 2048 3072 4096]
 const float shadowDistance		  		= 140.0;
 const bool  generateShadowMipmap    = false;
 const bool  shadowHardwareFiltering = false;
@@ -19,6 +19,7 @@ uniform mat4 shadowProjection;
 uniform mat4 shadowModelView;
 
 float shadowPixel = 1.0 / float(shadowMapResolution);
+vec2 shadowMapPixel = vec2(2048.0, 1.0 / 2048.0);
 
 float CalculateSunLightFading(in vec3 wP, in vec3 sP){
   float h = playerEyeLevel + defaultHightLevel;
@@ -39,11 +40,28 @@ vec3 wP2sP(in vec4 wP, out float bias){
   //sP.z /= max(far / shadowDistance, 1.0);
   //sP.z *= 0.25;
   sP = sP * 0.5 + 0.5;
+  sP.xy *= 0.8;
+  sP.xy = min(sP.xy, 0.8);
   //sP.z = exp(sP.z * 128.0) / exp(128.0);
   //sP.z = exp(sP.z * 128.0);
 
 	return sP.xyz;
 }
+
+vec3 wP2sP(in vec4 wP){
+	vec4 sP = shadowModelView * wP;
+       sP = shadowProjection * sP;
+       sP /= sP.w;
+
+  sP.xy /= mix(1.0, length(sP.xy), SHADOW_MAP_BIAS) / 0.95;
+
+  sP = sP * 0.5 + 0.5;
+  sP.xy *= 0.8;
+  sP.xy = min(sP.xy, 0.8);
+
+	return sP.xyz;
+}
+
 /*
 vec3 CalculateFogLighting(in vec3 color, in float cameraHight, in float worldHight, in vec3 sunLightingColor, in vec3 skyLightingColor, in float fading){
 	vec4 Wetness = vec4(0.0);
@@ -115,58 +133,62 @@ float CalculateRayMarchingShadow(in vec3 rayDirection, in vec3 viewVector){
 }
 */
 #ifdef Enabled_ScreenSpace_Shadow
-float ScreenSpaceShadow(in vec3 lightDirection, in vec3 viewPosition){
+vec3 ScreenSpaceShadow(in vec3 lightDirection, in vec3 viewPosition){
   int steps = 8;
   float isteps = 1.0 / steps;
 
-  float thickness = (0.001);
+  float thickness = 0.2 / far;
 
   float t = 1.0;
   float hit = 1.0;
 
   //float dither = R2sq(texcoord * resolution - jittering);
-  float dither = GetBlueNoise(depthtex2, texcoord, resolution.y, jittering);
+  float dither = GetBlueNoise(depthtex2, texcoord, resolution.y, jitter);
 
   vec3 start = viewPosition;
   vec3 direction = lightDirection * isteps * 0.3533;
-  //vec3 test = start + direction * (1.0 + sqrt(start.z * start.z) * 0.25) - direction * dither;
 
-  float l = length(-lightDirection+viewPosition);
+  float viewLength = length(viewPosition);
+  float distanceFade = clamp01((-viewLength + shadowDistance - 16.0) / 32.0);
 
-  vec3 test = start + direction * (dither);
-  //direction *= (1.0 + l * 0.014);
-       //test += dither * direction;
+  //if(viewLength > shadowDistance - 16.0)
+  if(bool(step(distanceFade, 0.99))){
+    thickness *= 8.0;
+    direction *= 8.0;
+  }
 
-  float depth = linearizeDepth(texture(depthtex0, texcoord).x);
+  vec3 test = start + direction;
+       test += dither * direction;
 
-  float count = 0.0;
+  float depth = (texture(depthtex0, texcoord).x);
+  if(bool(step(depth, 0.7))) return vec3(1.0);
+
+  //vec3 normal = normalDecode(texture2D(gnormal, texcoord).xy);
 
   for(int i = 0; i < steps; i++){
     vec3 coord = nvec3(gbufferProjection * vec4(test, 1.0)).xyz * 0.5 + 0.5;
-    if(floor(coord.xyz) != vec3(0.0)) break;
-    test += direction;
-    //vec3 sampleP = nvec3(gbufferProjectionInverse * nvec4(vec3(coord.xy, texture(depthtex0, coord.xy).x) * 2.0 - 1.0));
 
-    //float h = step(test.z + 0.04, sampleP.z) * step(sampleP.z, test.z + 0.125);// && sampleP.z < test.z + 1.0)
+    if(floor(coord.xyz) != vec3(0.0)) break;
+
     float h = texture(depthtex0, coord.xy).x;
-          //h = step(h, coord.z);
+    if(bool(step(h, 0.7))) continue;
+
+    //vec3 samplePosition = nvec3(gbufferProjectionInverse * nvec4(vec3(coord.xy, h) * 2.0 - 1.0));
 
     float linearZ = linearizeDepth(coord.z);
     float linearD = linearizeDepth(h);
     float dist = linearZ - linearD;
 
-    //if(dist < max(0.0002, 0.001 * depth) || dist > (linearD - depth) / depth * 4.0) continue;
-
+    //direction *= 1.08;
+    test += direction;
     if(dist < 1e-5) continue;
-    //if(dist > (linearD - depth) / depth) continue;
 
-    if(dist < thickness){
-      t = 0.0;
-      break;
+    if(dist < thickness) {
+      return vec3(0.0);
     }
   }
 
-  return clamp01(t);
+  return vec3(1.0);
 }
 #endif
 
@@ -240,7 +262,7 @@ float GetDepth(in sampler2D sampler, in vec2 coord, in float distort, in float d
   return result;
 }
 
-float FindBlocker(in vec2 uv, in float maxRadius, in float distort, in float dither){
+float somethingelse(in vec2 uv, in float maxRadius, in float distort, in float dither){
   float sum = 0.0;
   float d0 = texture(shadowtex0, uv).x;
 
@@ -305,6 +327,88 @@ float GetShadow(in sampler2D shadowtex, in vec3 coord, in float diffthresh, in f
 
   return result;
 }
+/*
+float PCF_Filter(in vec3 coord){
+  float sum = 0.0;
+
+  sum += textureGather()
+
+  return sum;
+}
+*/
+
+float shadowGather(in sampler2D sampler, in vec2 coord){
+  coord = round(coord * shadowMapPixel.x) * shadowMapPixel.y;
+
+  return (  texture(sampler, coord + vec2(shadowMapPixel.y, 0.0)).x
+          + texture(sampler, coord - vec2(shadowMapPixel.y, 0.0)).x
+          + texture(sampler, coord + vec2(0.0, shadowMapPixel.y)).x
+          + texture(sampler, coord - vec2(0.0, shadowMapPixel.y)).x) * 0.25;
+}
+
+float GetShadow(in sampler2D sampler, in vec3 coord) {
+  return step(coord.z, texture(sampler, coord.xy).x);
+}
+
+float shadowGather(in sampler2D sampler, in vec3 coord){
+  vec2 texSize = vec2(float(shadowMapResolution), shadowPixel);
+
+  coord.xy = round(coord.xy * texSize.x) * texSize.y;
+
+  return (  GetShadow(sampler, coord + vec3(texSize.y, 0.0, 0.0))
+          + GetShadow(sampler, coord - vec3(texSize.y, 0.0, 0.0))
+          + GetShadow(sampler, coord + vec3(0.0, texSize.y, 0.0))
+          + GetShadow(sampler, coord - vec3(0.0, texSize.y, 0.0))) * 0.25;
+}
+
+float shadowGatherOffset(in sampler2D sampler, in vec3 coord, in vec2 offset){
+  vec2 texSize = vec2(float(shadowMapResolution), shadowPixel);
+
+  return shadowGather(sampler, coord + vec3(offset * texSize.y, 0.0));
+}
+
+float shadowGatherOffset(in sampler2D sampler, in vec2 coord, in vec2 offset){
+  return shadowGather(sampler, coord + offset * shadowMapPixel.y);
+}
+
+float FindBlocker(in vec3 shadowMapCoord, out int blockerCount){
+  float blocker = 0.0;
+
+  vec2 dither = vec2(GetBlueNoise(depthtex2, texcoord, resolution.y, jittering),
+                     GetBlueNoise(depthtex2, 1.0 - texcoord, resolution.y, jittering));
+
+  //int blockerCount = 0;
+
+  for(int i = 0; i < 8; i++){
+    float angle = (float(i) + 1.0) * 0.125 * 2.0 * Pi;
+    vec2 direction = vec2(cos(angle), sin(angle));
+         direction = RotateDirection(direction, dither);
+
+    vec2 coord = shadowMapCoord.xy + direction * shadowMapPixel.y * 2.0;
+         coord = coord * 2.0 - 1.0;
+         coord /= mix(1.0, length(coord), SHADOW_MAP_BIAS) / 0.95;
+         coord = coord * 0.5 + 0.5;
+         coord.xy = coord.xy * 0.8;
+
+    if(coord.x < shadowMapPixel.y || coord.y < shadowMapPixel.y || coord.x > 0.8 - shadowMapPixel.y || coord.y > 0.8 - shadowMapPixel.y) continue;
+
+    float depth = texture(shadowtex0, coord).x;
+
+    //float depth = (  shadowGather(shadowtex1, coord + vec2(shadowMapPixel.y, 0.0))
+    //               + shadowGather(shadowtex1, coord - vec2(shadowMapPixel.y, 0.0))
+    //               + shadowGather(shadowtex1, coord + vec2(0.0, shadowMapPixel.y))
+    //               + shadowGather(shadowtex1, coord - vec2(0.0, shadowMapPixel.y))) * 0.25;
+
+    if(bool(step(depth, shadowMapCoord.z))) {
+      blocker += depth;
+      blockerCount++;
+    }
+  }
+
+  blocker /= max(float(blockerCount), 1.0);
+
+  return blocker;
+}
 
 vec4 CalculateShading(in sampler2D mainShadowTex, in sampler2D secShadowTex, in vec4 wP, in float preShadeShadow, in vec3 normal){
   float viewLength = length(wP.xyz);
@@ -337,7 +441,7 @@ vec4 CalculateShading(in sampler2D mainShadowTex, in sampler2D secShadowTex, in 
 
     float subShadow = 0.0;
 
-    vec3 shadowMapNormal = texture2D(shadowcolor0, shadowPosition.xy).xyz * 2.0 - 1.0;
+    vec3 shadowMapNormal = mat3(gbufferModelView) * (texture2D(shadowcolor1, shadowPosition.xy).xyz * 2.0 - 1.0);
     vec3 worldLightPosition = mat3(gbufferModelViewInverse) * normalize(shadowLightPosition);
 
     //TranslucentShadowMaps(translucentShadowMaps, shadowMapsIrrdiance, shadowPosition, shadowMapNormal, worldLightPosition);
@@ -347,17 +451,22 @@ vec4 CalculateShading(in sampler2D mainShadowTex, in sampler2D secShadowTex, in 
 
       //shadowPosition.xy = round(shadowPosition.xy * float(shadowMapResolution)) * shadowPixel;
 
-      float d = texture(shadowtex1, shadowPosition.xy).x;
+      float d1 = texture(shadowtex1, shadowPosition.xy).x;
       float d0 = texture(shadowtex0, shadowPosition.xy).x;
 
       shadowPosition.z -= diffthresh * (1.0 + viewLength * 0.01);
 
-      shading = step(shadowPosition.z, d);
+      shading = step(shadowPosition.z, d1);
 
       vec4 p0 = shadowProjectionInverse * vec4(vec3(shadowPosition.xy, d0) * 2.0 - 1.0, 1.0);
-      vec4 p1 = shadowProjectionInverse * vec4(vec3(shadowPosition.xy, d) * 2.0 - 1.0, 1.0);
+      vec4 p1 = shadowProjectionInverse * vec4(vec3(shadowPosition.xy, d1) * 2.0 - 1.0, 1.0);
 
       float shadowDepth = length(p1.xyz - p0.xyz);
+      
+      //vec3 halfDirection = normalize(normalize(shadowLightPosition) - ref)
+      vec3 f = F(vec3(0.02), normalize(shadowLightPosition), shadowMapNormal);
+
+      float ldotln = dot(normalize(shadowLightPosition), shadowMapNormal);
 
       //sunDirectLighting = mix(texture(shadowcolor1, shadowPosition.xy).rgb, vec3(1.0), 1.0 - step(d0, d));
 
@@ -365,17 +474,20 @@ vec4 CalculateShading(in sampler2D mainShadowTex, in sampler2D secShadowTex, in 
 
       float alpha = texture2D(shadowcolor0, shadowPosition.xy).a;
       shadowDepth = shadowDepth + alpha * alpha;
-      shadowDepth = min(shadowDepth, texture2D(shadowcolor1, shadowPosition.xy).a * 255.0);
+      shadowDepth = min(shadowDepth, texture2D(shadowcolor1, shadowPosition.xy).a * 16.0);
+      //shadowDepth /= max(1e-5, ldotln);
 
       vec4 colored = vec4(0.0);
-      colored.rgb = texture2D(shadowcolor1, shadowPosition.xy).rgb;
+      colored.rgb = decodeGamma(texture2D(shadowcolor0, shadowPosition.xy).rgb);
 
-      vec3 absorptioncoe = pow3(alpha) * (1.0 - colored.rgb) * Pi;
-      vec3 scatteringcoe = pow2(alpha) * vec3(Pi);
+      vec3 absorptioncoe =  (1.0 - colored.rgb) * pow5(alpha) * 10.47 / (length(colored.rgb + 0.005));//pow3(alpha) * (1.0 - colored.rgb) * Pi * 2.0;
+      vec3 scatteringcoe = pow2(alpha) * vec3(Pi) * 2.0;
 
       colored.rgb = exp(-(scatteringcoe + absorptioncoe) * shadowDepth);
+      colored.rgb *= 1.0 - f;
 
       colored.a = max(0.0, shading - step(shadowPosition.z - diffthresh * 1.0, d0));
+      //colored.a = 1.0 - step(d1 - shadowMapPixel.y * 3.0, d0);
 
       //colored.a = sqrt(colored.a);
       //shading = sqrt(shading);
@@ -385,6 +497,152 @@ vec4 CalculateShading(in sampler2D mainShadowTex, in sampler2D secShadowTex, in 
 
       //shading = shadow2D(mainShadowTex, shadowPosition - vec3(0.0, 0.0, diffthresh)).x;
       //subShadow = shadow2D(secShadowTex, shadowPosition - vec3(0.0, 0.0, diffthresh)).x
+    #else
+      //vec3 shadowMapCoord = wP2sP(wP);
+      //shading = step(shadowMapCoord.z, texture(shadowtex1, shadowMapCoord.xy).x + shadowMapPixel.y);
+
+      //shading = 0.0;
+
+      vec4 shadowMapCoord = shadowProjection * shadowModelView * (wP); shadowMapCoord /= shadowMapCoord.w;
+           shadowMapCoord = shadowMapCoord * 0.5 + 0.5;
+
+      float dither1 = GetBlueNoise(depthtex2, texcoord, resolution.y, jittering);
+      float dither2 = GetBlueNoise(depthtex2, 1.0 - texcoord, resolution.y, jittering);
+
+      float umbra = 0.0;
+
+      float ndotl = dot(normalize(shadowLightPosition), normal);
+      if(bool(step(ndotl, 1e-5))) return vec4(vec3(0.0), 1.0);
+      
+      float receiver = shadowMapCoord.z - shadowMapPixel.y;
+            //receiver -= shadowMapPixel.y / ndotl * 0.04;
+            receiver -= shadowMapPixel.y * max(0.05, length(shadowMapCoord.xy * 2.0 - 1.0)) * 32.0;
+
+      const vec4 bitShL = vec4(16777216.0, 65536.0, 256.0, 1.0);
+      const vec4 bitShR = vec4(1.0/16777216.0, 1.0/65536.0, 1.0/256.0, 1.0);
+        /*
+      for(int i = 0; i < 8; i++){
+        float angle = float(i + 1.0) * 0.125 * 2.0 * Pi;
+        vec2 direction = vec2(cos(angle), sin(angle));
+        //     direction = RotateDirection(direction, vec2(dither1, dither2));
+
+        vec2 coord = shadowMapCoord.xy + direction * shadowMapPixel.y * 2.0;
+             coord = coord * 2.0 - 1.0;
+             coord /= mix(1.0, length(coord), SHADOW_MAP_BIAS) / 0.95;
+             coord = coord * 0.5 + 0.5;
+             coord.xy = coord.xy * 0.8;
+
+        if(coord.x < shadowMapPixel.y || coord.y < shadowMapPixel.y || coord.x > 0.8 - shadowMapPixel.y || coord.y > 0.8 - shadowMapPixel.y) continue;
+        //coord.xy = round(coord.xy * shadowMapPixel.x * 0.25) * shadowMapPixel.y * 4.0;
+
+        //float depth = dot(bitShR.zw, texture2D(gaux2, coord.xy).xy);
+        float depth = texture(shadowtex0, coord).x;
+
+        umbra += step(receiver - shadowMapPixel.y * length(direction * 2.0) * 1.414, depth);
+      }
+
+      umbra *= 0.125;
+      umbra = step(umbra, 0.01);
+        */
+      vec3 red = vec3(1.0, 0.0, 0.0);
+      vec3 green = vec3(0.0, 1.0, 0.0);
+      vec3 blue = vec3(0.0, 0.0, 1.0);
+      vec3 magenta = vec3(1.0, 0.0, 1.0);
+
+      //if(bool(umbra)) return vec4(magenta, 1.0);
+
+      //if(fullBlack) return vec4(red, 1.0);
+      //if(fullWhite) return vec4(magenta, 1.0);
+
+      //if(!fullBlack && !fullWhite) return vec4(magenta, 1.0);
+
+      //if(bool(step(0.875, shading2))) return vec4(vec3(1.0), 1.0);
+      //if(bool(step(shading2, 0.01))) return vec4(vec3(0.0), 1.0);
+
+      //if(bool(step(0.9, shading2)) || bool(step(shading2, 0.1))) return vec4(vec3(shading2), 1.0);
+
+      //if(bool(step(0.9, shading2))) return vec4(magenta, 1.0);
+
+      //if(bool(step(shading2, 0.1))) return vec4(vec3(0.0), 1.0);
+      //if(bool(step(0.8, earlyShading1))) return vec4(vec3(1.0), 1.0);
+
+      float blocker = 0.0; int blockerCount = 0;
+      //if(!fullBlack && !fullWhite)
+      blocker = FindBlocker(vec3(shadowMapCoord.xy, receiver), blockerCount);
+
+      if(blockerCount < 3) return vec4(vec3(1.0), 1.0);
+
+      //receiver -= viewLength * shadowMapPixel.y * 0.08;
+      //receiver -= shadowMapPixel.y / saturate(ndotl) * 0.08;
+
+      float penumbra = (receiver - blocker) * 8.0 / blocker;
+            penumbra = clamp(penumbra, 0.05, 2.0);
+
+      for(int i = 0; i < 8; i++){
+        float angle = (float(i) + 1.0) * 0.125 * 2.0 * Pi;
+        vec2 direction = vec2(cos(angle), sin(angle));
+             direction = RotateDirection(direction, vec2(dither1, dither2));
+             direction *= penumbra;
+
+        vec2 coord = shadowMapCoord.xy + direction * shadowMapPixel.y;
+             coord = coord * 2.0 - 1.0; float distortion = mix(1.0, length(coord), SHADOW_MAP_BIAS) / 0.95;
+             coord /= distortion;
+             coord = coord * 0.5 + 0.5;
+             coord.xy = coord.xy * 0.8;
+
+        if(coord.x < shadowMapPixel.y || coord.y < shadowMapPixel.y || coord.x > 0.8 - shadowMapPixel.y || coord.y > 0.8 - shadowMapPixel.y) continue;
+
+        //shading += (  shadowGatherOffset(shadowtex1, vec3(coord, receiver), vec2( 2.0,  0.0))
+        //            + shadowGatherOffset(shadowtex1, vec3(coord, receiver), vec2(-2.0,  0.0))
+        //            + shadowGatherOffset(shadowtex1, vec3(coord, receiver), vec2( 0.0,  2.0))
+        //            + shadowGatherOffset(shadowtex1, vec3(coord, receiver), vec2( 0.0, -2.0))) * 0.25;
+
+        //if(bool(step(penumbra, 0.2) + step(0.5, penumbra)))
+          shading += GetShadow(shadowtex1, vec3(coord, receiver));
+        //else
+        //  shading += (  shadowGatherOffset(shadowtex1, vec3(coord, receiver), vec2( 1.0,  1.0))
+        //              + shadowGatherOffset(shadowtex1, vec3(coord, receiver), vec2( 1.0, -1.0))
+        //              + shadowGatherOffset(shadowtex1, vec3(coord, receiver), vec2(-0.0, -1.0))
+        //              + shadowGatherOffset(shadowtex1, vec3(coord, receiver), vec2(-1.0,  1.0))) * 0.25;
+
+        //float depth = (  shadowGather(shadowtex1, coord + vec2(shadowMapPixel.y, 0.0))
+        //               + shadowGather(shadowtex1, coord - vec2(shadowMapPixel.y, 0.0))
+        //               + shadowGather(shadowtex1, coord + vec2(0.0, shadowMapPixel.y))
+        //               + shadowGather(shadowtex1, coord - vec2(0.0, shadowMapPixel.y))) * 0.25;
+
+        //shading += step(receiver, depth + shadowMapPixel.y);
+
+        //shading += shadowGather(shadowtex1, vec3(coord, receiver));
+
+        //shading += (  shadowGather(shadowtex1, vec3(coord + vec2(shadowMapPixel.y, 0.0) * 2.0, receiver))
+        //            + shadowGather(shadowtex1, vec3(coord - vec2(shadowMapPixel.y, 0.0) * 2.0, receiver))
+        //            + shadowGather(shadowtex1, vec3(coord + vec2(0.0, shadowMapPixel.y) * 2.0, receiver))
+        //            + shadowGather(shadowtex1, vec3(coord - vec2(0.0, shadowMapPixel.y) * 2.0, receiver))) * 0.25;
+
+        //shading += (  shadowGather(shadowtex1, vec3(coord + vec2(shadowMapPixel.y), receiver))
+        //            + shadowGather(shadowtex1, vec3(coord - vec2(shadowMapPixel.y), receiver))
+        //            + shadowGather(shadowtex1, vec3(coord + vec2(shadowMapPixel.y, -shadowMapPixel.y), receiver))
+        //            + shadowGather(shadowtex1, vec3(coord - vec2(shadowMapPixel.y, -shadowMapPixel.y), receiver))) * 0.25;
+      }
+
+      shading *= 0.125;
+      //shading = pow(shading, 2.2);
+
+      sunDirectLighting = vec3(shading);
+      /*
+      vec2 coord = shadowMapCoord.xy;
+           coord = coord * 2.0 - 1.0;
+           coord /= mix(1.0, length(coord), SHADOW_MAP_BIAS) / 0.95;
+           coord = coord * 0.5 + 0.5;
+           //coord.xy = coord.xy * 0.8;
+
+      const vec4 bitShL = vec4(16777216.0, 65536.0, 256.0, 1.0);
+      const vec4 bitShR = vec4(1.0/16777216.0, 1.0/65536.0, 1.0/256.0, 1.0);
+
+      float d = dot(bitShR.zw, texture2D(gaux2, coord.xy).xy);
+
+      sunDirectLighting = vec3(step(receiver, d));
+      */
     #endif
 
     /*
@@ -427,7 +685,7 @@ vec4 CalculateShading(in sampler2D mainShadowTex, in sampler2D secShadowTex, in 
     float radius = shadowPixel;
     float maxRadius = 12.0;
 
-    float blocker = FindBlocker(shadowPosition.xy, maxRadius, bias, dither);
+    float blocker = (shadowPosition.xy, maxRadius, bias, dither);
     float receiver = shadowPosition.z - diffthresh * maxRadius;
 
     float penumbra = (receiver - blocker) / blocker;

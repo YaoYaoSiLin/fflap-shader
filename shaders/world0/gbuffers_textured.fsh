@@ -31,6 +31,11 @@ vec2 normalEncode(vec3 n) {
     return enc;
 }
 
+void CalculateParticleNormal(inout vec3 result){
+  vec3 facingToPlayer = nvec3(gbufferProjectionInverse * nvec4(vec3(0.5, 0.5, 0.7) * 2.0 - 1.0));
+  result = normalize(-facingToPlayer);
+}
+
 void main() {
   vec4 albedo = texture2D(texture, texcoord) * color;
 
@@ -62,10 +67,23 @@ void main() {
 
   float mask = 250.0 / 255.0;
 
-/* DRAWBUFFERS:01235 */
+  vec3 particlesNormal = vec3(0.0);
+  CalculateParticleNormal(particlesNormal);
+
+  vec2 encodeNormal = normalEncode(particlesNormal);
+
+  float lightmapPackge = pack2x8(lmcoord);
+  float emissive = max(floor(lmcoord.x * 15.0 - 14.0), speculars.b) * 0.06;
+  vec4 lightmap = vec4(lightmapPackge, 1.0, emissive, 1.0);
+
+  float specularPackge = pack2x8(speculars.rg);
+
+/* DRAWBUFFERS:0123 */
   gl_FragData[0] = albedo;
-  gl_FragData[1] = vec4(lmcoord, mask, clamp01(lmcoord.x * 15.0 - 14.0) * 0.06);
-  gl_FragData[2] = vec4(vec2(0.0), speculars.r, 1.0);
-  gl_FragData[3] = vec4(vec2(0.0), speculars.g, 1.0);
-  gl_FragData[4] = vec4(0.0, 0.0, 0.0, gl_FragCoord.z);
+  gl_FragData[1] = lightmap;
+  gl_FragData[2] = vec4(encodeNormal, mask, 1.0);
+  gl_FragData[3] = vec4(encodeNormal, specularPackge, 1.0);
+
+  //gl_FragData[4] = vec4(gl_FragCoord.z, 0.0, 0.0, 1.0);
+  //gl_FragData[4] = vec4(albedo.rgb, 1.0);
 }

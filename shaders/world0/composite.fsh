@@ -1,12 +1,11 @@
 #version 130
 
-#define SpecularityReflectionPower 2.0            //[1.0 1.2 1.5 1.75 2.0 2.25 2.5 2.75 3.0]
-
 uniform sampler2D gcolor;
 uniform sampler2D gdepth;
 uniform sampler2D gnormal;
 uniform sampler2D composite;
 uniform sampler2D gaux2;
+uniform sampler2D gaux1;
 
 uniform sampler2D depthtex0;
 uniform sampler2D depthtex1;
@@ -52,65 +51,96 @@ vec3 RemovalColor(in vec3 image, in vec3 color, in float t){
   return (image - color) / (1.0 - t) + color;
 }
 
+vec3 GetScatteringCoe(in vec4 albedo){
+  return pow2(albedo.a) * vec3(Pi);
+}
+
+vec3 GetAbsorptionCoe(in vec4 albedo){
+  return (1.0 - albedo.rgb) * pow3(albedo.a) * Pi;
+}
+
 void main(){
   vec4 albedo = texture2D(gcolor, texcoord);
 
-  float skyLightMap = texture2D(gdepth, texcoord).y;
-
-  vec3 normal = normalDecode(texture2D(gnormal, texcoord).xy);
-  float alpha = texture2D(composite, texcoord).x;
-
-  float smoothness = texture2D(gnormal, texcoord).b;
-  float metallic   = texture2D(composite, texcoord).b;
+  vec2 unpackLightmap = unpack2x8(texture(gdepth, texcoord).x);
+  float skyLightMap = unpackLightmap.y;
   float emissive   = texture2D(gdepth, texcoord).z;
+
+  vec3 normal = normalDecode(texture2D(composite, texcoord).xy);
+  //vec3 visibleNormal = normalDecode(texture2D(composite, texcoord).xy);
+  float alpha = texture2D(gnormal, texcoord).x;
+
+  vec2 unpackSpecular = unpack2x8(texture(composite, texcoord).b);
+
+  float smoothness = unpackSpecular.x;
+  float metallic   = unpackSpecular.y;
   float roughness  = 1.0 - smoothness;
         roughness  = roughness * roughness;
+
   vec3 F0 = vec3(metallic);
        F0 = mix(F0, albedo.rgb, step(0.5, metallic));
 
-  float mask = round(texture2D(composite, texcoord).z * 255.0);
+  float mask = round(texture2D(gnormal, texcoord).z * 255.0);
   bool isWater      = CalculateMaskID(8.0, mask);
   bool isIce        = CalculateMaskID(79.0, mask);
   bool isParticels = bool(step(249.5, mask) * step(mask, 250.5));
   bool emissiveParticels = bool(step(250.5, mask) * step(mask, 252.5));
 
-  vec4 image = texture2D(gaux2, texcoord);
-       image.rgb *= overRange;
+  bool isGlass      = CalculateMaskID(20.0, mask);
+  bool isGlassPane = CalculateMaskID(106.0, mask);
+  bool isStainedGlass = CalculateMaskID(95.0, mask);
+  bool isStainedGlassPane = CalculateMaskID(160.0, mask);
+  bool AnyGlass = isGlass || isGlassPane || isStainedGlass || isStainedGlassPane;
+  bool AnyGlassBlock = isGlass || isStainedGlass;
 
-  albedo.rgb = rgb2L(albedo.rgb);
+  vec4 color = texture2D(gaux2, texcoord);
+       color.rgb = decodeGamma(color.rgb) * decodeHDR;
 
   vec3 vP = nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, texture(depthtex0, texcoord).x) * 2.0 - 1.0));
   vec3 svP = nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, texture(depthtex1, texcoord).x) * 2.0 - 1.0));
   vec3 wP = mat3(gbufferModelViewInverse) * vP;
   vec3 nvP = normalize(vP.xyz);
-  vec3 reflectionVector = normalize(reflect(nvP, normal));
+  vec3 L = normalize(reflect(nvP, normal));
 
   float translucentBlockLength = length(svP - vP);
 
   vec3 worldSunPosition = mat3(gbufferModelViewInverse) * normalize(sunPosition);
 
+  albedo.rgb = decodeGamma(albedo.rgb);
+
+  float skyVisiblity = max(0.0, skyLightMap - 0.07) / 0.93;
+
   if(bool(albedo.a) && !isParticels && !emissiveParticels){
-    vec3 color = albedo.rgb * skyLightingColorRaw;
+    vec3 fogColor = albedo.rgb * skyLightingColorRaw;
 
-    color = L2rgb(color);
+    vec3 f = vec3(0.0);
+    float g = 0.0, d = 0.0;
+    FDG(f, g, d, L, -nvP, normal, L2Gamma(F0), roughness);
+    float brdf = saturate(g * d) * 0.95;
 
-    vec3 m = normalize(reflectionVector - nvP);
-    float vdoth = pow5(1.0 - clamp01(dot(-nvP, m)));
-    vec3 f = F(F0, vdoth);
-    float brdf = min(1.0, CalculateBRDF(-nvP, reflectionVector, normal, roughness));
+    vec3 p = mat3(gbufferModelViewInverse) * L;
+    vec3 eyePosition = vec3(0.0, cameraPosition.y - 63.0, 0.0);
+    vec3 skySpecularReflection = CalculateInScattering(eyePosition, p, worldSunPosition, 0.76, ivec2(16, 2), vec3(1.0, 1.0, 0.0));
+         skySpecularReflection = ApplyEarthSurface(skySpecularReflection, eyePosition, p, worldSunPosition);
+         skySpecularReflection = (skySpecularReflection * pow3(skyVisiblity));
 
-    vec3 skySpecularReflection = CalculateSky(reflectionVector, worldSunPosition, 0.0, 1.0);
-    color *= 1.0 - brdf * max(f, vec3(step(0.5, metallic)));
-    color += skySpecularReflection * sqrt(brdf * f);
+    //fogColor += skySpecularReflection * sqrt(f * brdf);
 
-    image.rgb = RemovalColor(image.rgb, color, image.a);
-    if(image.a > 0.99) image.rgb = vec3(0.0);
-    image.rgb *= 1.0 - max(0.0, image.a * 0.7071);
+    //fogColor = (fogColor);
+
+    color.rgb = RemovalColor(color.rgb, fogColor, color.a);
+    //if(alpha > 0.99) image.rgb = vec3(0.0);
+    //image.rgb *= 1.0 - max(0.0, image.a * 0.7071);
+    //image.rgb = fogColor;
   }
 
-  image.rgb /= overRange;
+  //vec3 backPosition = nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, texture(gaux1, texcoord).x) * 2.0 - 1.0));
+  //color.rgb = abs(length(vP) - texture(gaux1, texcoord).x * 544.0) * vec3(1.0 / 100.0);
 
+  color.rgb = encodeGamma(color.rgb * encodeHDR);
 
-/* DRAWBUFFERS:5 */
-  gl_FragData[0] = image;
+  //color.rgb /= overRange;
+
+  /* DRAWBUFFERS:5 */
+  gl_FragData[0] = color;
 }

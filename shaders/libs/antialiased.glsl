@@ -1,4 +1,4 @@
-#define TAA_Sharpen 70 //[0 5 10 15 20 25 30 35 40 45 50 55 60 65 70 75 80 85 90 95 100]
+#define TAA_Sharpen 50 //[0 5 10 15 20 25 30 35 40 45 50 55 60 65 70 75 80 85 90 95 100]
 
 #define Yuv 0
 #define YCoCg 1
@@ -6,7 +6,7 @@
 
 #ifdef Enabled_TAA
   vec3 encodePalYuv(vec3 rgb) {
-      rgb = (rgb);
+      rgb = decodeGamma(rgb);
 
       return vec3(
           dot(rgb, vec3(0.299, 0.587, 0.114)),
@@ -22,7 +22,7 @@
           dot(yuv, vec3(1., 2.03211, 0.))
       );
 
-      return (rgb);
+      return encodeGamma(rgb);
   }
 
   // https://software.intel.com/en-us/node/503873
@@ -32,6 +32,9 @@
 		// Co = R/2 - B/2
 		// Cg = -R/4 + G/2 - B/4
     //return c;
+
+    c = decodeGamma(c);
+
 		return vec3(
 			 c.x/4.0 + c.y/2.0 + c.z/4.0,
 			 c.x/2.0 - c.z/2.0,
@@ -45,11 +48,14 @@
 		// G = Y + Cg
 		// B = Y - Co - Cg
     //return c;
-		return saturate(vec3(
+
+    c = saturate(vec3(
 			c.x + c.y - c.z,
 			c.x + c.z,
 			c.x - c.y - c.z
 		));
+
+		return encodeGamma(c);
 	}
 
   #if Color_Format == Yuv
@@ -107,7 +113,7 @@
 
     vec2 velocity = coord.xy - view.xy;
 
-    if(coord.z < 0.7) velocity *= 0.0001;
+    if(coord.z < 0.7) velocity *= 0.01;
 
     return velocity;
   }
@@ -131,165 +137,26 @@
 
   vec4 ReprojectSampler(in sampler2D tex, in vec2 pixelPos){
     vec4 result = vec4(0.0);
-    /*
-    float weights = 0.0;
-
-    //vec2 velocity = pixelPos - texcoord - jittering * pixel;
-    //pixelPos = pixelPos - velocity;
-
-    for(float i = -1.0; i <= 1.0; i += 1.0){
-      for(float j = -1.0; j <= 1.0; j += 1.0){
-        vec2 samplePos = vec2(i, j);
-        float weight = gaussianBlurWeights(samplePos + 0.0001);
-
-        vec4 sampler = texture2D(tex, samplePos * pixel / sqrt(32.0) + pixelPos);
-
-        weights += weight;
-        result += sampler * weight;
-      }
-    }
-
-    result /= weights;
-    */
-    /*
-    sum = texture2D(tex, pixelPos);
-    sum.rgb = RGB_YCoCg(sum.rgb);
-    */
-
-    //pixelPos = round(pixelPos * resolution);
-
-    //sum = SampleTextureCatmullRom(tex, pixelPos, resolution);
-    //sum.rgb = RGB_YCoCg(sum.rgb);
-    /*
-    vec2 samplePos = pixelPos * resolution;
-    vec2 texPos1 = floor(samplePos - 0.5) + 0.5;
-
-    vec2 f = samplePos - texPos1;
-
-    vec2 w0 = f * ( -0.5 + f * (1.0 - 0.5*f));
-    vec2 w1 = 1.0 + f * f * (-2.5 + 1.5*f);
-    vec2 w2 = f * ( 0.5 + f * (2.0 - 1.5*f) );
-    vec2 w3 = f * f * (-0.5 + 0.5 * f);
-
-    vec2 w12 = w1 + w2;
-    vec2 offset12 = w2 / (w1 + w2);
-
-    vec2 texPos0 = texPos1 - vec2(1.0);
-    vec2 texPos3 = texPos1 + vec2(2.0);
-    vec2 texPos12 = texPos1 + offset12;
-
-    texPos0 *= pixel;
-    texPos3 *= pixel;
-    texPos12 *= pixel;
-
-    result += texture2D(tex, vec2(texPos0.x,  texPos0.y)) * w0.x * w0.y;
-    result += texture2D(tex, vec2(texPos12.x, texPos0.y)) * w12.x * w0.y;
-    result += texture2D(tex, vec2(texPos3.x,  texPos0.y)) * w3.x * w0.y;
-
-    result += texture2D(tex, vec2(texPos0.x,  texPos12.y)) * w0.x * w12.y;
-    result += texture2D(tex, vec2(texPos12.x, texPos12.y)) * w12.x * w12.y;
-    result += texture2D(tex, vec2(texPos3.x,  texPos12.y)) * w3.x * w12.y;
-
-    result += texture2D(tex, vec2(texPos0.x,  texPos3.y)) * w0.x * w3.y;
-    result += texture2D(tex, vec2(texPos12.x, texPos3.y)) * w12.x * w3.y;
-    result += texture2D(tex, vec2(texPos3.x,  texPos3.y)) * w3.x * w3.y;
-    result.rgb = RGB_YCoCg(result.rgb);
-
-    */
-/*
-    pixelPos = pixelPos * resolution;
-
-    float weights = 0.0;
-
-    for(float i = -1.0; i <= 2.0; i += 3.0){
-      for(float j = -1.0; j <= 2.0; j += 3.0){
-        vec2 samplePos = round(pixelPos + vec2(i, j));
-        vec2 sampleDist = abs(samplePos - pixelPos);
-
-        float weight = FilterCubic(sampleDist.x, 0, 0.5) * FilterCubic(sampleDist.y, 0, 0.5);
-        weights += weight;
-
-        sum += texture2D(tex, samplePos * pixel) * weight;
-      }
-    }
-
-    sum /= weights;
-    sum.rgb = RGB_YCoCg(sum.rgb);
-*/
-
-    /*
-    pixelPos = (pixelPos * resolution);
-
-    float weights = 0.0;
-
-    for(float i = -1.0; i <= 1.0; i += 1.0){
-      for(float j = -1.0; j <= 1.0; j += 1.0){
-        vec2 samplePos = round(pixelPos + vec2(i, j) - 0.5) + 0.5;
-
-        vec4 sampler = texture2D(tex, samplePos*pixel);
-
-        float weight = gaussianBlurWeights(abs(samplePos-pixelPos) + 0.0001);
-
-        result += sampler * weight;
-
-        weights += weight;
-      }
-    }
-
-    result /= weights;
-    */
-    /*
-    vec2 samplePos = pixelPos * resolution;
-    vec2 texPos1 = round(samplePos+0.5)-0.5;
-
-    vec2 f = samplePos - texPos1;
-
-    float w0 = gaussianBlurWeights(f.x);
-    float w3 = gaussianBlurWeights(f.y);
-    float w12 = w0 + w3;
-
-    vec2 texPos0 = texPos1 - vec2(2.0) * 1.0;
-    vec2 texPos3 = texPos1 + vec2(1.0) * 1.0;
-    vec2 texPos12 = texPos1 + vec2(w0) / (w0 + w3) * 1.0;
-
-    texPos0 *= pixel;
-    texPos3 *= pixel;
-    texPos12 *= pixel;
-
-    result += texture2D(tex, vec2(texPos0.x, texPos0.y)) * w0 * w0;
-    result += texture2D(tex, vec2(texPos0.x, texPos12.y)) * w0 * w12;
-    result += texture2D(tex, vec2(texPos0.x, texPos3.y)) * w0 * w3;
-
-    result += texture2D(tex, vec2(texPos12.x, texPos0.y)) * w12 * w0;
-    result += texture2D(tex, vec2(texPos12.x, texPos12.y)) * w12 * w12;
-    result += texture2D(tex, vec2(texPos12.x, texPos3.y)) * w12 * w3;
-
-    result += texture2D(tex, vec2(texPos3.x, texPos0.y)) * w3 * w0;
-    result += texture2D(tex, vec2(texPos3.x, texPos12.y)) * w3 * w12;
-    result += texture2D(tex, vec2(texPos3.x, texPos3.y)) * w3 * w3;
-
-    result /= w0*w0 + w12*w12 + w3*w3 + w0*w12*2.0 + w0*w3*2.0 + w12*w3*2.0;
-    */
-    //result = texture2D(tex, texPos1 * pixel);
 
     #if 0
-      float weights = 0.0;
+      float sigma = 0.83;
+            sigma = 2.0 * pow2(sigma);
 
       for(float i = -1.0; i <= 1.0; i += 1.0){
         for(float j = -1.0; j <= 1.0; j += 1.0){
-          vec2 samplePos = vec2(i, j) * 0.2;
-          //float weight = gaussianBlurWeights(samplePos + 0.0001);
-          float weight = exp(-(pow2(samplePos.x * samplePos.x)) / (2.0 * 0.64))
-                       * exp(-(pow2(samplePos.y * samplePos.y)) / (2.0 * 0.64));
+          vec2 samplePos = vec2(i, j) * 0.1;
+          
+          float x = pow2(length(samplePos) + 1e-5);
 
-          vec4 sampler = texture2D(tex, pixelPos + samplePos * pixel);
+          float weight = exp(-x / sigma);
 
-          weights += weight;
+          vec4 sampler = vec4((texture2D(tex, pixelPos + samplePos * pixel).rgb), 1.0);
+
           result += sampler * weight;
         }
       }
 
-      result /= weights;
+      result.rgb /= result.a;
     #else
     vec2 position = resolution * pixelPos;
     vec2 centerPosition = floor(position - 0.5) + 0.5;
@@ -315,8 +182,9 @@
                   vec4(centerColor, 1.0) * (w12.x * w12.y) +
                   vec4(texture2D(tex, vec2(tc3.x, tc12.y)).rgb, 1.0) * (w3.x * w12.y) +
                   vec4(texture2D(tex, vec2(tc12.x, tc3.y)).rgb, 1.0) * (w12.x * w3.y);
+
     result /= result.a;
-    result.rgb = max(result.rgb, vec3(0.0));
+    result.rgb = saturate(result.rgb);
     #endif
 
     result.rgb = encode(result.rgb);
@@ -324,79 +192,81 @@
     return result;
   }
 
-  vec3 CalculateTAA(in sampler2D color_tex, in sampler2D last_color){
-    vec2 unjittering = texcoord + jittering * pixel;
+  void ResolverAABB(in sampler2D colorSampler, in vec2 coord, inout vec3 minColor, inout vec3 maxColor){
+    vec3 sampleColor = vec3(0.0);
+    float totalWeight = 0.0;
 
-    vec3 maxColor = vec3(-1.0);
-    vec3 minColor = vec3(1.0);
-    vec3 sharpen  = vec3(0.0);
-
-    vec3 closest = GetClosest(unjittering);
+    vec3 m1 = vec3(0.0);
+    vec3 m2 = vec3(0.0);
 
     for(float i = -1.0; i <= 1.0; i += 1.0){
       for(float j = -1.0; j <= 1.0; j += 1.0){
-        vec3 color_temp = texture2D(color_tex, unjittering + vec2(i, j) * pixel).rgb;
+        vec3 sampler = encode(texture2D(colorSampler, coord + vec2(i, j) * pixel).rgb);
+
+        float weight = 1.0;//gaussianBlurWeights(vec2(i, j) + 1e-5);
+        sampleColor += sampler * weight;
+        totalWeight += weight;
+
+        m1 += sampler;
+        m2 += sampler * sampler;
+      }
+    }
+
+    sampleColor /= totalWeight;
+
+    vec3 mean = m1 / 9.0;
+    vec3 stddev = sqrt((m2 / 9.0) - (mean * mean));
+
+    float scale = 8.0;
+
+    minColor = sampleColor - stddev * scale;
+    maxColor = sampleColor + stddev * scale;
+
+    vec3 centerColor = encode(texture2D(colorSampler, coord).rgb);
+    minColor = min(minColor, centerColor);
+    maxColor = max(maxColor, centerColor);
+  }
+
+  uniform vec2 jitter;
+
+  vec3 CalculateTAA(in sampler2D currentSampler, in sampler2D previousSampler){
+    vec2 unjitter = texcoord + jitter;
+
+    vec3 maxColor = vec3(-1.0);
+    vec3 minColor = vec3(1.0);
+    ResolverAABB(currentSampler, unjitter, minColor, maxColor);
+
+    vec3 closest = GetClosest(unjitter);
+    /*
+    for(float i = -1.0; i <= 1.0; i += 1.0){
+      for(float j = -1.0; j <= 1.0; j += 1.0){
+        vec3 color_temp = texture2D(currentSampler, unjitter + vec2(i, j) * pixel).rgb;
              color_temp = encode(color_temp);
 
         maxColor = max(maxColor, color_temp);
         minColor = min(minColor, color_temp);
-
-        //if(i != 0 || j != 0)
-        sharpen += color_temp * min(1.0, abs(sign(i)) + abs(sign(j)));
       }
     }
-
-    sharpen /= 8.0;
-    //color = RGB_YCoCg(color);
-
-    vec3 currentColor = texture2D(color_tex, unjittering).rgb;
-    currentColor = encode(currentColor);
+    */
+    vec3 currentColor = encode(texture2D(currentSampler, unjitter).rgb);
 
     vec2 previousCoord = GetMotionVector(closest);
     vec2 velocity = previousCoord;
 
     float motion = length(previousCoord*resolution);
-          //motion = step(0.001, motion);
+          motion = saturate(motion * 0.0025 * TAA_Sharpen);
 
     previousCoord = texcoord - previousCoord;
 
     float inScreenPrev = step(0.0, previousCoord.x) * step(previousCoord.x, 1.0) * step(0.0, previousCoord.y) * step(previousCoord.y, 1.0);
 
-    vec3 previousColor = ReprojectSampler(last_color, previousCoord).rgb;
-         //previousColor = encode(previousColor);
+    vec3 previousColor = ReprojectSampler(previousSampler, previousCoord).rgb;
          previousColor = clipToAABB(previousColor, minColor, maxColor);
 
-    #define LowFreqWeight 0.8
-    #define HighFreqWeight  0.95
-
-    vec3 weightA = vec3(0.95) * inScreenPrev;
+    vec3 weightA = vec3(0.95 - motion * 0.45) * inScreenPrev;
     vec3 weightB = 1.0 - weightA;
 
-    #define Static_Blend 0
-    #define Lum_Base_Blend 1
-    #define Color_Base_Blend 2
-    #define TAA_Blend Color_Base_Blend //[Static_Blend Lum_Base_Blend Color_Base_Blend]
-
-    #if TAA_Blend == Lum_Base_Blend
-    vec3 Lweight = vec3(0.2126, 0.7152, 0.0722);
-    float maxL = dot(maxColor, Lweight);
-    float minL = dot(minColor, Lweight);
-    float cenL = dot(currentColor, Lweight);
-    float blend = clamp01(abs(maxL - minL) / cenL);
-    #elif TAA_Blend == Color_Base_Blend
-    vec3 blend = clamp01(abs(maxColor - minColor) / currentColor);
-    #endif
-
-    #if TAA_Blend > 0 && TAA_Blend < 3
-    //weightB = lerq(vec3(LowFreqWeight), vec3(HighFreqWeight), maxComponent(blend)) * inScreenPrev;
-    //weightA = 1.0 - weightB;
-    #endif
-
     vec3 antialiased = (currentColor * weightB + previousColor * weightA);
-
-    sharpen = clamp(currentColor - sharpen, vec3(-0.002), vec3(0.002));
-    sharpen *= lerq(vec3(0.7071), vec3(sqrt(2.0)), maxComponent(blend));
-    //antialiased += sharpen * inScreenPrev * TAA_Sharpen * 0.01;
 
     return decode(antialiased);
   }

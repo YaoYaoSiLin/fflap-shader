@@ -22,17 +22,7 @@ out vec4 color;
 out vec3 vP;
 #endif
 
-#ifdef Enabled_TAA
-  uniform int frameCounter;
-
-  uniform float viewWidth;
-  uniform float viewHeight;
-
-  vec2 resolution = vec2(viewWidth, viewHeight);
-  vec2 pixel = 1.0 / vec2(viewWidth, viewHeight);
-
-  #include "../libs/jittering.glsl"
-#endif
+uniform vec2 jitter;
 
 #ifdef GbufferHand
   attribute vec4 mc_Entity;
@@ -102,6 +92,6 @@ void main() {
   #endif
 
   #ifdef Enabled_TAA
-    gl_Position.xy += jittering * gl_Position.w * pixel * 0.5;
+    gl_Position.xy += jitter * 2.0 * gl_Position.w;
   #endif
 }

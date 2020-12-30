@@ -2,8 +2,15 @@ vec3 F(vec3 F0, float cosTheta){
  return F0 + (1.0 - F0) * cosTheta;
 }
 
-float DistributionTerm( float roughness, float ndoth )
-{
+vec3 F(vec3 F0, vec3 V, in vec3 N){
+  float cosTheta = pow5(1.0 - saturate(dot(V, N)));
+
+ return F(F0, cosTheta);
+}
+
+float DistributionTerm( float roughness, float ndoth ) {
+  roughness = clamp(roughness, 0.0001, 0.9999);
+
 	float d	 = ( ndoth * roughness - ndoth ) * ndoth + 1.0;
 	return roughness / ( d * d * Pi );
 }
@@ -44,16 +51,13 @@ void FDG(inout vec3 f, inout float g, inout float d, in vec3 rayOrigin, in vec3 
 
   f = F(F0, pow5(1.0 - ndotv));
   d = DistributionTerm(roughness * roughness, ndoth);
-  g = VisibilityTerm(d, ndotv, ndotl);
+  g = G(ndotl, roughness) * G(ndotv, roughness);
 }
-
-#define BRDF_Bias 0.7
 
 #define HightLightNerf 0.996
 
-
 float ApplyBRDFBias(in float a){
-  return mix(a, 0.0, BRDF_Bias);
+  return mix(a, 0.0, 0.7);
 }
 
 #if CalculateHightLight == 1
@@ -76,9 +80,55 @@ vec3 DisneyDiffuse(in vec3 l, in vec3 v, in vec3 n, in float a, in vec3 albedo){
   return albedo * invPi * FDL * FDV;
 }
 
+vec3 DiffuseLight(in vec3 albedo, in vec3 l, in vec3 v, in vec3 nvisible, in vec3 ntextured, in vec3 F0, in float roughness, in float metallic){
+  if(bool(step(0.5, metallic))) return vec3(0.0);
+
+  vec3 h = normalize(l + v);
+
+  float ndotl = max(0.0, dot(l, ntextured));
+  float ndotv = max(0.0, dot(v, ntextured));
+
+  if(!bool(ndotl)) return vec3(0.0);
+  
+  float hdotl = max(0.0, dot(l, h));
+
+  float FD90 = hdotl * hdotl * roughness * 2.0 + 0.5;
+
+  float FDV = 1.0 + (FD90 - 1.0) * pow5(ndotv);
+  float FDL = 1.0 + (FD90 - 1.0) * pow5(ndotl);
+
+  vec3 f = F(F0, max(0.0, pow5(1.0 - hdotl)));
+
+  vec3 diffuse = invPi * albedo.rgb * FDL * FDV;
+       diffuse *= 1.0 - metallic;
+       diffuse *= 1.0 - f;
+
+  return diffuse;
+}
+
+vec3 SpecularLight(in vec3 albedo, in vec3 l, in vec3 v, in vec3 nvisible, in vec3 ntextured, in vec3 F0, in float roughness, in float metallic){
+  vec3 h = normalize(l+v);
+
+  float ndotl = max(0.0, dot(l, ntextured));
+  if(ndotl < 1e-5) return vec3(0.0, 0.0, 0.0);
+
+  float ndotv = max(0.0, dot(v, nvisible));
+  if(ndotv < 1e-5) return vec3(0.0);
+
+  float hdotl = max(0.0, dot(l, h));
+  float ndoth = max(0.0, dot(ntextured, h));
+
+  vec3 f = F(F0, pow5(1.0 - hdotl));
+  float d = DistributionTerm(roughness * roughness, ndoth);
+  float g = G(ndotl, roughness) * G(ndotv, roughness);
+  float c = 4.0 * (1e-5 + ndotl * ndotv);
+
+  vec3 specular = saturate(f * g * d / c * ndotl);
+
+  return specular;
+}
 
 vec3 BRDFLighting(in vec3 albedo, in vec3 l, in vec3 v, in vec3 nvisible, in vec3 nfull, in vec3 F0, in float roughness, in float metallic){
-  roughness = ApplyBRDFBias(roughness);
   roughness = mix(1.0, roughness, HightLightNerf);
 
   vec3 h = normalize(l+v);
@@ -98,8 +148,8 @@ vec3 BRDFLighting(in vec3 albedo, in vec3 l, in vec3 v, in vec3 nvisible, in vec
   float FDV = 1.0 + (FD90 - 1.0) * pow5(ndotv);
   float FDL = 1.0 + (FD90 - 1.0) * pow5(ndotl);
 
-  vec3 diffuse = albedo.rgb * invPi * FDL * FDV;
-       diffuse *= (1.0 - step(0.5, metallic));
+  vec3 diffuse = invPi * albedo.rgb * FDL * FDV;
+       diffuse *= step(metallic, 0.5) * (1.0 - metallic);
 
   ndotl = max(0.0, dot(l, nvisible));
   ndotv = max(0.0, dot(v, nvisible));
@@ -112,7 +162,9 @@ vec3 BRDFLighting(in vec3 albedo, in vec3 l, in vec3 v, in vec3 nvisible, in vec
   float g = G(ndotl, roughness) * G(ndotv, roughness);
   float c = 4.0 * (1e-2 + ndotl * ndotv);
 
-  vec3 lighting = diffuse + f * g * d / c;
+  vec3 specular = saturate(f * g * d / c * ndotl);
+
+  vec3 lighting = diffuse + specular;
        lighting *= saturate(pow5(dot(nfull, l) + 0.5) * 4.0);
 
   return lighting;

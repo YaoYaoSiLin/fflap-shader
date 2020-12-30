@@ -142,7 +142,7 @@ void main(){
 
     vec3 samplerPosition = vec3(0.0, 0.0, 0.0);
 
-    vec3 sunLightingExtinction = Extinction(samplerPosition, sP);
+    vec3 sunLightingExtinction = Extinction(samplerPosition, sP) * 0.4;
     vec3 skyLihgtingExtinction = Extinction(samplerPosition, vec3(0.0, 1.0, 0.0));
 
     //fading = maxComponent(sunLightingExtinction);
@@ -150,14 +150,14 @@ void main(){
     fading = saturate((abs(sP.y) - 0.05) * 20.0);
 
     //sunLightingColorRaw = CalculateInScattering(samplerPosition, sP, sP, 0.996, ivec2(5, 2), vec3(0.0, 1.0, 1.0));
-    sunLightingColorRaw = invPi * sunLightingExtinction;
+    sunLightingColorRaw = sunLightingExtinction;
     skyLightingColorRaw = CalculateInScattering(samplerPosition, normalize(vec3(0.0, 1.0, 0.0) - sP), sP, 0.5, ivec2(5, 2), vec3(1.0, 1.0, 0.0));
     //skyLightingColorRaw *= (skyLihgtingExtinction);
     //skyLightingColorRaw /= maxComponent(skyLihgtingExtinction);
 
-    vec3 moonLighting = Extinction(samplerPosition, -sP) * 0.03 * invPi;
-    sunLightingColorRaw += moonLighting;
-    skyLightingColorRaw += moonLighting * bR * 4000.0;
+    vec3 moonLighting = Extinction(samplerPosition, -sP) * 0.05 * 0.4;
+    sunLightingColorRaw += moonLighting * bM * 20000.0;
+    skyLightingColorRaw += moonLighting * bR * 1000.0;
 
     //skyLightingColorRaw += skyLihgtingExtinction * maxComponent(moonLighting) * 0.03 * invPi * 0.01;
 

@@ -57,8 +57,10 @@ float R2sq(in vec2 coord){
   return t(mod(coord.x * a1 + coord.y * a2, 1));
 }
 
-float GetBlueNoise(in sampler2D tex, in vec2 uv, float uvScale, vec2 jitter){
+float GetBlueNoise(in sampler2D tex, in vec2 uv, float uvScale, vec2 offset){
   float noiseScale = 64.0;
-  uv = uv * vec2(aspectRatio, 1.0) * uvScale / noiseScale;
-  return texture(tex, uv - jitter).x;
+  uv = (uv) * vec2(aspectRatio, 1.0) * uvScale / noiseScale;
+  uv -= offset * resolution;
+
+  return texture(tex, uv).x;
 }

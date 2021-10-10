@@ -21,6 +21,7 @@ uniform sampler2D noisetex;
 
 uniform mat4 shadowProjection;
 uniform mat4 shadowProjectionInverse;
+uniform mat4 shadowModelView;
 uniform mat4 shadowModelViewInverse;
 uniform mat4 gbufferProjection;
 uniform mat4 gbufferProjectionInverse;
@@ -28,6 +29,7 @@ uniform mat4 gbufferModelView;
 uniform mat4 gbufferModelViewInverse;
 
 uniform vec3 cameraPosition;
+uniform float eyeAltitude;
 
 uniform float frameTimeCounter;
 uniform float far;
@@ -60,6 +62,8 @@ void main() {
   vertexBlockID = MaskID(blockID, 8.0) + MaskID(blockID, 20) + MaskID(blockID, 106) + MaskID(blockID, 95) + MaskID(blockID, 160);
 
 	if(mc_Entity.x == 8){
+    vertex_color.a = 0.05;
+/*
 		#if Water_Color_Test > disable
 			#if Water_Color_Test == normal_biomes
 				color.rgb = vec3(0.247 , 0.4627, 0.8941);
@@ -75,7 +79,7 @@ void main() {
 				color.rgb = vec3(0.2392, 0.3411, 0.8392);
 			#endif
 		#endif
-
+*/
 		vertex_color = CalculateWaterColor(vertex_color);
 	}
 
@@ -125,11 +129,9 @@ void main() {
     position.xyz += wave * 0.021;
   }
 
-  float angle = -0.25 * 2.0 * Pi;
-  mat2 rotate = mat2(cos(angle), sin(angle),-sin(angle), cos(angle));
+  position = gl_ModelViewMatrix * gl_Vertex;
 
-  position = gl_ModelViewMatrix * position;
+  worldPosition = shadowModelViewInverse * position;// - vec4(cameraPosition, 0.0);
 
-  worldPosition = shadowModelViewInverse * position;
   gl_Position = position;
 }

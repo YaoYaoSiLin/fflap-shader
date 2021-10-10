@@ -31,7 +31,7 @@ in vec3 tangent;
 
 in vec4 color;
 
-#include "../libs/common.inc"
+#include "/libs/common.inc"
 
 vec2 normalEncode(vec3 n) {
     vec2 enc = normalize(n.xy) * (sqrt(-n.z*0.5+0.5));

@@ -24,6 +24,7 @@ uniform float viewHeight;
 uniform float aspectRatio;
 
 uniform int frameCounter;
+
 uniform float frameTimeCounter;
 
 uniform vec3 cameraPosition;
@@ -32,20 +33,14 @@ uniform vec3 previousCameraPosition;
 in vec2 texcoord;
 
 const bool gaux4Clear = false;
-const bool compositeMipmapEnabled = true;
+const bool gdepthMipmapEnabled = true;
 
-vec2 resolution = vec2(viewWidth, viewHeight);
-vec2 pixel = 1.0 / resolution;
+uniform vec2 pixel;
+uniform vec2 resolution;
 
-#define Gaussian_Blur
-
-#include "../libs/common.inc"
-#include "../libs/jittering.glsl"
-
-#define aaDepthTexture depthtex0
-#define aaDepthComp 0
-
-#include "../libs/antialiased.glsl"
+#include "/libs/common.inc"
+#include "/libs/jittering.glsl"
+#include "/libs/antialiased.glsl"
 
 /* DRAWBUFFERS:57 */
 
@@ -69,21 +64,35 @@ void main(){
   #ifdef Enabled_TAA
     antialiased = CalculateTAA(gaux2, gaux4);
   #endif
+  /*
+  float exposureCurr = 0.0 * luminance(texture2D(composite, vec2(0.5)).rgb); 
+  float totalWeight = 0.0;
 
-  float exposureCurr = luminance(texture2DLod(composite, vec2(0.5 + jitter), viewWidth).rgb);
-        exposureCurr = pow(exposureCurr, 2.2) * decodeHDR * 16.0 * 3.0;
-        exposureCurr = 1.0 - exp(-exposureCurr);
-        //exposureCurr = exposureCurr / (exposureCurr + 1.0);
+  for(int i = 0; i < 16; i++){
+    vec2 coord = haltonSequence_2n3[i];
 
-  float exposurePrev = texture2D(gaux4, vec2(0.5)).a;
+    float l = distance(coord, vec2(0.5));
 
-  float maxExp = max(exposureCurr, exposurePrev);
-  float minExp = min(exposureCurr, exposurePrev);
+    float weight = (1.0 - exp(-l*l/1.3378));// * step(0.7, texture(depthtex0, coord).x); 
+    exposureCurr += luminance(textureGather(composite, coord, resolution).rgb) * weight;
+    totalWeight += weight;
+  }
 
-  //help me plz
-  float exposure = float(1 + frameCounter) / (0.01666 + frameTimeCounter);
-        exposure = clamp(0.7071 / exposure, 0.008, 0.48);
+    exposureCurr /= totalWeight;
+    */
+
+  float exposureCurr = luminance(decodeGamma(texture2DLod(gdepth, vec2(0.5), viewHeight).rgb) * 31.0);
+        exposureCurr = 1.0 - exp(-exposureCurr * 8000.0);
+
+  float exposurePrev = pow(texture2D(gaux4, vec2(0.5)).a, 2.2);
+
+  float weight = float(1 + frameCounter) / (0.01666 + frameTimeCounter);
+
+  float exposure = clamp(2.0 / weight, 0.008, 0.48);
         exposure = mix(exposurePrev, exposureCurr, exposure);
+        exposure = pow(exposure, 1.0 / 2.2);
+        exposure = min(1.0, exposure);
+        
   //if(exposurePrev == 0.0) exposure = 0.5;
 
   //antialiased = texture2D(gaux2, texcoord + jitter).rgb;

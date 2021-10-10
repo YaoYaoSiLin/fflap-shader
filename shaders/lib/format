@@ -1,0 +1,422 @@
+(albedo.rg), (albedo.ba), (roughness, metallic), 1.0
+e(oct(normal0)), e(oct(normal1)), heightmap, 1.0
+(material_ao, emissive) (material, id) e(lightmap)
+
+colortex0 RGBA8 albedo.rgb
+colortex1 RGBA32UI vec4(encode(lightmap.x, emissive), encode(skylightmap, self-shadow), encode(smoothness, metallic), 1.0)
+colortex2 RGBA32UI flatNormal.sRGB texturedNormal.sRGB 
+colortex3 RGBA16 
+colortex4 RGBA32UI backFaceDepth encode(backFaceNormal.xyz, 1.0) encode
+colortex5 RGBA16F color
+
+113 xxx
+110 ssr 0.24ms
+109 enb 0.08ms
+106 sky 0.26ms
+temportal 0.6ms
+108 noators 0.17ms
+
+vec3 normalDecode(vec2 enc) {
+    vec4 nn = vec4(2.0 * enc - 1.0, 1.0, -1.0);
+    float l = dot(nn.xyz,-nn.xyw);
+    nn.z = l;
+    nn.xy *= sqrt(l);
+    return nn.xyz * 2.0 + vec3(0.0, 0.0, -1.0);
+}
+
+#include "/libs/common.inc"
+#include "/libs/lighting.glsl"
+#include "/libs/dither.glsl"
+
+void main() {
+    float notopaque = step(0.9, texture2D(gcolor, texcoord).a);
+
+    float tileMaterial  = round(texture2D(gnormal, texcoord).z * 255.0);
+    bool isSky = bool(step(254.5, tileMaterial));
+
+    float depth0 = texture(depthtex0, texcoord).x;
+
+    vec3 vP = nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord, depth0) * 2.0 - 1.0));
+    vec4 wP = (gbufferModelViewInverse) * nvec4(vP);
+    vec3 viewDirection = normalize(vP);
+    vec3 eyeDirection = -viewDirection;
+
+    vec3 albedo = decodeGamma(texture2D(gcolor, texcoord).rgb);
+
+    vec3 texturedNormal = normalDecode(texture2D(composite, texcoord).xy);
+    vec3 geometryNormal = texture2D(gcolor, texcoord).a > 0.99 ? texturedNormal : normalDecode(texture2D(gnormal, texcoord).xy);
+    vec3 visibleNormal = dot(eyeDirection, texturedNormal) < 0.2 ? geometryNormal : texturedNormal;
+
+    vec2 specularPackge = unpack2x8(texture2D(composite, texcoord).b);
+    float smoothness = specularPackge.x;
+    float roughness = pow2(1.0 - specularPackge.x);
+    float metallic  = specularPackge.y;
+    float material  = floor(texture2D(composite, texcoord).a * 255.0);
+    float metal = step(isMetallic, metallic);
+    vec3 F0 = mix(vec3(max(0.02, metallic)), albedo.rgb, metal);
+
+    float sigma_s = notopaque > 0.5 ? texture(gnormal, texcoord).g * 255.0 : material;
+          sigma_s = (1.0 - (sigma_s - 64.0) / 191.0) * 16.0;
+
+    float alpha = notopaque > 0.5 ? texture(gdepth, texcoord).b : 1.0;
+
+    vec3 color = decodeGamma(texture2D(gaux2, texcoord).rgb);
+
+    vec3 rayDirection = normalize(reflect(viewDirection, texturedNormal));// (smoothness > 0.7 ? visibleNormal : geometryNormal)
+    if(dot(rayDirection, texturedNormal) < 0.0) rayDirection = normalize(reflect(viewDirection, geometryNormal));
+
+    vec3 fr = SpecularLighting(vec4(albedo, alpha * 0.03 * sigma_s), rayDirection, eyeDirection, texturedNormal, texturedNormal, F0, roughness, metallic, (material < 64.5 ? 0.0 : material), true);
+    
+    //if(material > 64.5) fr *= 0.03 * alpha * sigma_s;
+
+/*
+    vec2 h_coord = round(texcoord * resolution * 0.5) * pixel * 2.0;
+    vec3 h_normal = normalDecode(texture2D(composite, h_coord).xy);
+    float h_depth = texture(depthtex0, h_coord).x;
+
+    if(h_depth > 0.9) specular = vec3(1.0, 0.0, 0.0);
+*/
+    #if 1
+    vec3 specular = decodeGamma(texture2D(gaux1, texcoord).rgb);
+    #else
+    vec3 specular = vec3(0.0);
+    float total = 0.0;
+
+    for(float i = -2.0; i <= 2.0; i += 1.0) {
+        for(float j = -2.0; j <= 2.0; j += 1.0) {
+            vec2 texel_position = texcoord + vec2(i, j) * pixel;
+            vec2 h_position = floor(texel_position * resolution * 0.5) * pixel * 2.0;
+
+            vec3 sample_normal = normalDecode(texture2D(composite, h_position).xy);
+            float normal_weight = pow(saturate(dot(sample_normal, texturedNormal)), 128.0);
+
+            float sample_depth = texture(depthtex0, h_position).x;
+            float depth_weight = saturate(1.0 - abs(sample_depth - depth0) / min(sample_depth, depth0) * 1000.0);
+                  depth_weight *= mix(1.0, 0.0, rescale(0.9, 1.0, sample_depth));
+
+            float weight = normal_weight * depth_weight;
+
+            specular += decodeGamma(texture2D(gaux1, texel_position).rgb) * weight;
+            total += weight;
+        }
+    }
+
+    if(total > 0.0)
+    specular /= total;
+    else specular = decodeGamma(texture2D(gaux1, texcoord).rgb);
+    #endif
+
+    //color = vec3(0.0);
+    color += isSky ? vec3(0.0) : specular * fr;
+    //color = fr;
+    //color = specular;
+
+    //color = total * vec3(1.0);
+
+
+    //color = vec3(saturate(dot(texturedNormal, -viewDirection)));
+
+    //color = vec3(saturate(ImportanceSampleGGX(vec2(dither, ApplyBRDFBias(dither2)), roughness).a));
+    #if 0
+    //rayDirection = normalize(reflect(viewDirection, texturedNormal));
+    float ndoth = max(0.0, dot((dot(rayDirection, texturedNormal) < 0.0 ? geometryNormal : texturedNormal), normalize(rayDirection + eyeDirection)));
+
+    float dither = GetBlueNoise(depthtex2, (texcoord) * resolution, jitter * 1.0);
+    float dither2 = GetBlueNoise(depthtex2, (1.0 - texcoord) * resolution, jitter * 1.0);
+    float rpdf = ImportanceSampleGGX(vec2(dither, ApplyBRDFBias(dither2)), roughness).a;
+          rpdf = DistributionTerm(roughness, ndoth) * ndoth;
+
+    color = vec3(saturate(rpdf));
+    
+    if(rpdf > 0.5) color = vec3(1.0, 0.0, 0.0);
+    //if(rpdf > 4.0) color = vec3(0.0, 1.0, 0.0);
+    //if(rpdf > 8.0) color = vec3(0.0, 0.0, 1.0);
+    //if(rpdf > 16.0) color = vec3(1.0, 1.0, 0.0);
+    //if(rpdf > 32.0) color = vec3(0.0, 1.0, 1.0);
+    //if(rpdf > 64.0) color = vec3(0.0, 0.0, 0.0);
+    #endif
+
+    color = encodeGamma(color);
+
+    //color = texture2D(shadowcolor0, texcoord).rgb;
+
+    //color = abs(mat3(gbufferModelViewInverse) * normalDecode(texture2D(composite, floor(texcoord * resolution * 0.5) * 2.0 * pixel).xy));
+
+    gl_FragData[0] = vec4(color, 1.0);
+}
+/* DRAWBUFFERS:5 */
+///
+
+	CalculateScreenSpaceTracing(color, flatNormal, texturedNormal);
+#if 0
+	vec3 hitPosition = vec3(0.0);
+
+	vec3 rayDirection2 = vec3(0.0);
+
+	//float backDepth = GetBackDepth(viewPosition, flatNormal);
+
+	bool hit = tracing(viewPosition, flatNormal, hitPosition, rayDirection2);
+	rayDirection2 = mat3(gbufferModelViewInverse) * rayDirection2;
+
+	//color = vec3(0.0);
+
+	if(true){
+		vec2 offset = vec2(0.0);
+
+		#ifdef Enabled_TAA
+			offset = jitter;
+		#endif
+
+		vec3 viewPosition = nvec3(gbufferProjectionInverse * nvec4(vec3(texcoord - offset, texture(depthtex0, texcoord - offset).x) * 2.0 - 1.0));
+
+		vec3 wP = mat3(gbufferModelViewInverse) * viewPosition;
+		vec3 v = normalize(wP);
+
+		vec2 coord = nvec3(gbufferProjection * nvec4(hitPosition)).xy * 0.5 + 0.5;
+
+		vec3 worldNormal = mat3(gbufferModelViewInverse) * (texture2D(gcolor, coord).a > 0.99 ? normalDecode(texture2D(composite, coord).xy) : normalDecode(texture2D(gnormal, coord).xy));
+
+		vec3 bias = vec3(0.0);
+
+		if(dot(worldNormal, vec3(0.0, 1.0, 0.0)) > 1.0 - 1e-5){
+			bias = vec3(0.0, 1.0, 0.0);
+		}else if(dot(worldNormal, vec3(0.0, -1.0, 0.0)) > 1.0 - 1e-5){
+			bias = vec3(0.0, -1.0, 0.0);
+		}else if(dot(worldNormal, vec3(1.0, 0.0, 0.0)) > 1.0 - 1e-5){
+			bias = vec3(1.0, 0.0, 0.0);
+		}else if(dot(worldNormal, vec3(-1.0, 0.0, 0.0)) > 1.0 - 1e-5){
+			bias = vec3(-1.0, 0.0, 0.0);
+		}else if(dot(worldNormal, vec3(0.0, 0.0, 1.0)) > 1.0 - 1e-5){
+			bias = vec3(0.0, 0.0, 1.0);
+		}else if(dot(worldNormal, vec3(0.0, 0.0, -1.0)) > 1.0 - 1e-5){
+			bias = vec3(0.0, 0.0, -1.0);
+		}
+
+		vec3 bias2 = vec3(0.0);
+
+		vec3 worldNormal2 = mat3(gbufferModelViewInverse) * flatNormal;
+		vec3 worldNormal3 = mat3(gbufferModelViewInverse) * texturedNormal;
+
+		if(dot(worldNormal2, vec3(0.0, 1.0, 0.0)) > 1.0 - 1e-5){
+			bias2 = vec3(0.0, 1.0, 0.0);
+		}else if(dot(worldNormal2, vec3(0.0, -1.0, 0.0)) > 1.0 - 1e-5){
+			bias2 = vec3(0.0, -1.0, 0.0);
+		}else if(dot(worldNormal2, vec3(1.0, 0.0, 0.0)) > 1.0 - 1e-5){
+			bias2 = vec3(1.0, 0.0, 0.0);
+		}else if(dot(worldNormal2, vec3(-1.0, 0.0, 0.0)) > 1.0 - 1e-5){
+			bias2 = vec3(-1.0, 0.0, 0.0);
+		}else if(dot(worldNormal2, vec3(0.0, 0.0, 1.0)) > 1.0 - 1e-5){
+			bias2 = vec3(0.0, 0.0, 1.0);
+		}else if(dot(worldNormal2, vec3(0.0, 0.0, -1.0)) > 1.0 - 1e-5){
+			bias2 = vec3(0.0, 0.0, -1.0);
+		}
+
+		vec3 cubeCenter = floor(wP + cameraPosition - bias2 * 0.99) + 0.5;
+
+		float nearPoint = -1.0; float farPoint = -1.0; vec3 cubeNormal = vec3(0.0);
+		bool hit2 = intersectCube(cameraPosition - cubeCenter, v, vec3(0.5), nearPoint, farPoint);
+
+		if(hit2) color = vec3(farPoint - max(0.0, nearPoint));
+
+		#if 0
+		/*
+		float nearPoint = -1.0; float farPoint = -1.0; vec3 cubeNormal = vec3(0.0);
+    	bool hit2 = intersectCube(cameraPosition - cubeCenter, normalize(mat3(gbufferModelViewInverse) * hitPosition), vec3(0.5), nearPoint, farPoint, cubeNormal, true);
+
+		vec3 viewcubeNormal = mat3(gbufferModelView) * cubeNormal;
+
+		//color = length(cubeCenter) * 0.01 * vec3(1.0);
+
+		if(hit2){
+			float emissive = texture2D(gdepth, coord).b;
+			vec3 albedo = decodeGamma(texture2D(gcolor, coord).rgb);
+
+			color = abs(cubeNormal) * emissive * saturate(dot(rayDirection2, texturedNormal)) * saturate(dot(-rayDirection2, viewcubeNormal));
+			//color = abs(cubeNormal) * emissive;
+
+			//color = (cubeNormal) * texture2D(gdepth, coord).b;//(farPoint - max(0.0, nearPoint)) * vec3(0.01);
+			//color = decodeGamma(texture2D(gcolor, coord).rgb) * texture2D(gdepth, coord).b;
+		}
+		*/
+
+		float nearPoint = -1.0; float farPoint = -1.0; vec3 cubeNormal = vec3(0.0);
+
+		//cubeCenter = vec3(13.0, 71.0, -55.0) + 0.5;
+
+		bool hit2 = intersectCube(cameraPosition + wP - cubeCenter, rayDirection2, vec3(0.5), nearPoint, farPoint, cubeNormal, true);
+
+		if(hit2 && nearPoint > 1e-3){
+			float emissive = texture2D(gdepth, coord).b;
+			vec3 albedo = decodeGamma(texture2D(gcolor, coord).rgb);
+
+			float cosTheta = saturate(dot(rayDirection2, -cubeNormal)) * saturate(dot(rayDirection2, worldNormal3));
+
+			//color += saturate(dot(rayDirection2, -cubeNormal)) * saturate(dot(rayDirection2, worldNormal3)) * albedo * emissive;// / (1e-5 + pow2(length(cameraPosition + wP - cubeCenter)));
+			color = abs(cubeNormal) * emissive * cosTheta;
+		}
+		#endif
+	}
+#endif
+
+/*
+	--: Seamless cell noise : --
+	   nachocpol@gmail.com
+*/
+
+vec2 ran2( vec2 p ) 
+{
+	return fract(sin(vec2(dot(p,vec2(127.1,311.7)),
+			  			  dot(p,vec2(269.5,183.3))))
+                 			* 43758.5453123);
+}
+
+float TileCell(vec2 tc, int grid, float seed)
+{
+    vec2 p   = tc * float(grid);
+    vec2 ftc = fract(p);
+    vec2 itc = floor(p);
+    float m  = 1.0;
+    
+    for(int i = -1; i < 2; i++)
+    {
+        for(int j = -1; j < 2; j++)
+        {
+            vec2 n = vec2(i,j);
+            vec2 q = itc + n;
+            
+            if(q.x == -1.0)q.x = float(grid-1);
+            else if(q.x == float(grid))q.x = 0.0;
+                
+            if(q.y == -1.0)q.y =float(grid-1);
+            else if(q.y == float(grid))q.y = 0.0;
+
+            vec2 rp 	= ran2(q * seed);
+            vec2 diff 	= n + rp - ftc;
+            float dist 	= length(diff);
+            m 			= min(m,dist);
+        }
+    } 
+    
+    return pow(1.0 - m,1.0);
+}
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+    vec2 uv 	= fragCoord/iResolution.xy;
+    float t 	= (sin(iTime * 0.25) * 4.0) + 6.0;
+    uv 			= fract(uv*1.0);   
+    // Cell noise 
+    float c 	= TileCell(uv,8,1.0);
+    fragColor.xyz = vec3(0.3,0.25,0.67) * c;
+}
+
+dlsite查杏子御津，标题带催眠那个
+
+void CalculateCloestClouds(inout vec3 color, in vec4 rayOrigin, in bool isSky, inout float fogDensity){
+  vec3 L = mat3(gbufferModelViewInverse) * normalize(shadowLightPosition);
+  vec3 rayDirection = normalize(rayOrigin.xyz);
+  float mu = dot(L, rayDirection);
+
+  float viewLength = length(rayOrigin.xyz);
+
+  vec3 P = vec3(cameraPosition.xz, eyeAltitude).xzy;
+
+  //color = vec3(0.0);
+  
+  float dither = GetBlueNoise(depthtex2, texcoord, resolution.y, jitter) * 1.0;
+
+  vec3 b = vec3(0.04);
+
+  int steps = 6;
+  float invsteps = 1.0 / float(steps);
+
+  //vec3(stepRayPosition.xz, rayDirection + stepHeight).xzy
+  float stepLength = thickness * invsteps;
+
+  float layerHeight = height;
+        layerHeight -= dither * stepLength;
+
+  float t = frameTimeCounter * 3.0;
+
+  float opticalDepth = 0.0;
+  float lastHitLength = (0.0);
+
+  vec3 cloudsColor = vec3(0.0);
+
+  vec3 lightingStep = -L * vec3(-vec2(48.0), 48.0).xzy / 6.0;
+
+  float g = 0.2;
+  float phase = HG(mu, g);
+  float phase2 = HG(0.999, g);
+  float phaseMG76 = HG(mu, 0.76);
+
+  float cloudsWorley = 0.05;
+  float cloudsPerlin = 0.01;
+  float cloudsDensity = -0.12;
+
+  vec3 direction = rayDirection * invsteps * 24.0;
+
+  vec3 rayPosition = direction * (dither + 0.05);
+
+  for(int i = 0; i < steps; i++){
+    float stepViewLength = length(rayPosition);
+    vec3 cloudExtinction = exp(-b * opticalDepth);
+
+    if(bool(step(viewLength, stepViewLength))) break;
+    
+    vec3 stepShadowCoord = wP2sP(vec4(rayPosition, rayOrigin.w));
+
+    float d0 = texture(shadowtex0, stepShadowCoord.xy).x;
+    
+    vec3 sunLightExtinction = vec3(0.0);
+    float visibility = step(stepShadowCoord.z, d0);
+
+    vec3 worldRayPosition = rayPosition + P;
+    float stepHeight = worldRayPosition.y;
+
+    if(bool(step(0.5, visibility))){
+      vec3 stepLightingPosition = worldRayPosition + lightingStep * dither;
+      float opticalDepthLight = 0.0;
+      float lastDepthLight = 0.0;
+
+      for(int j = 0; j < 6; j++){
+        float stepHeightLight = stepLightingPosition.y;
+        if(stepHeightLight >= height) break;
+
+        float shape = CloudsShape(stepLightingPosition * 0.01, vec3(t, 0.0, 0.0) * 0.01, stepHeightLight);
+              shape = rescale(-cloudsDensity - (cloudsPerlin + cloudsWorley) * cloudsDensity * 0.35, 1.0, shape);
+
+        float stepLengthLight = length(stepLightingPosition - worldRayPosition);
+
+        opticalDepthLight += shape * stepLengthLight;
+        lastDepthLight = 1.0;
+
+        stepLightingPosition += lightingStep;
+      }
+
+      sunLightExtinction = exp(-opticalDepthLight * b * vec3(1.022, 0.782, 0.384) * 10.0);
+    }
+
+    float shape = CloudsShape(worldRayPosition * 0.01, vec3(t, 0.0, 0.0) * 0.01, stepHeight);
+          shape = CalculateCloudsNoise(shape, worldRayPosition, stepHeight, vec3(t, 0.0, 0.0), cloudsWorley, cloudsPerlin);
+
+    float density = rescale(-cloudsDensity, 1.0, shape) * 10.0;
+
+    vec3 sunLighting = sunLightingColorRaw * phase * sunLightExtinction;
+    //vec3 skyLighting = skyLightingColorRaw * phase2 * exp(-b * 10.0 * distance(stepHeight, height)) * distance(stepHeight, height);
+
+    //vec3 stepColor = sunLighting + skyLighting;
+
+    cloudsColor += density * cloudExtinction * min(normalize(b), b * stepViewLength) * sunLighting;
+
+    opticalDepth += density * abs(stepViewLength - lastHitLength);
+    lastHitLength = stepViewLength;
+
+    rayPosition += direction;
+  }
+
+  fogDensity = opticalDepth;
+  color *= exp(-b * opticalDepth);
+
+  color = cloudsColor * invPi * 10.0;
+}

@@ -28,7 +28,7 @@ in vec3 normal;
 
 in vec4 color;
 
-#include "../libs/common.inc"
+#include "/libs/common.inc"
 
 vec2 normalEncode(vec3 n) {
     vec2 enc = normalize(n.xy) * (sqrt(-n.z*0.5+0.5));
@@ -79,8 +79,8 @@ void main() {
   //if(entityId == 10) discard;
 
   float lightmapPackge = pack2x8(lmcoord);
-  float emissive = max(floor(lmcoord.x * 15.0 - 13.0), speculars.b) * 0.06;
-  vec4 lightmap = vec4(lightmapPackge, 1.0, emissive, 1.0);
+  float emissive = max(floor(lmcoord.x * 15.0 - 13.0), speculars.b) * 254.0 / 255.0;
+  vec4 lightmap = vec4(lightmapPackge, 1.0, pack2x8(vec2(emissive, 1.0)), 1.0);
 
   float specularPackge = pack2x8(speculars.rg);
 
@@ -88,6 +88,6 @@ void main() {
   gl_FragData[0] = albedo;
   gl_FragData[1] = lightmap;
   gl_FragData[2] = vec4(encodeNormal, mask, 1.0);
-  gl_FragData[3] = vec4(encodeNormal, specularPackge, 1.0);
+  gl_FragData[3] = vec4(encodeNormal, specularPackge, speculars.b);
   //gl_FragData[4] = vec4(gl_FragCoord.z, 0.0, 0.0, 1.0);
 }

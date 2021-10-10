@@ -1,6 +1,9 @@
+#ifndef INCLUDE_PACKING
+  #define INCLUDE_PACKING
+#endif
+
 #define EXPTWO32MONE 4294967295.0f
 #define EXPTWO16MONE 65535.0f
-//#define packing2x16_constant
 
 uint packUnorm2x8(in vec2 v){
   v = floor(v * 255.0);

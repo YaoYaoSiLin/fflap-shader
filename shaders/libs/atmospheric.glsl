@@ -1,14 +1,27 @@
-#define SunLight 1.0	//[2.0 2.1 2.2 2.3 2.4 2.5 2.6 2.7 2.8 2.9 3.0 3.1 3.2 3.3 3.4 3.5 3.6 3.7 3.8 3.9 4.0]
-#define SkyLight 1.0	//
+#define SunLight 3.0		//
+#define SkyLight 1.0		//
+#define MoonLight 0.12		//
 
-#ifndef AtmosphericScattering_Steps
-	#define AtmosphericScattering_Steps 4
+#define Sea_Level 63.0
+
+#define Altitude_Scale 1.0		//[1.0 3.0 9.0 18.0 27.0 54.0 81.0 163.0 243.0 729.0 2187.0 6561.0]
+
+#define Extended_Earth_Surface_Atmospheric_Density 30.0
+#define Extended_Land_Atmospheric_Density 30.0
+
+#ifndef INCLUDE_ATMOSPHERIC
+#define INCLUDE_ATMOSPHERIC
 #endif
 
-#ifndef AtmosphericScattering_Stepss
-	#define AtmosphericScattering_Stepss 4
-#endif
+const float rE = 6360e3;
+const float rA = 6420e3;
+const float Hr = 8000.0;
+const float Hm = 1200.0;
 
+const vec3 bM = vec3(2e-6);
+const vec3 bR = vec3(5.8e-6, 13.5e-6, 33.1e-6);
+
+/*
 const float rE = 6360e3;
 const float rA = 6420e3;
 const float Hr = 7994;
@@ -16,143 +29,9 @@ const float Hm = 1200;
 
 const vec3 bM = vec3(21e-6);
 const vec3 bR = vec3(5.8e-6, 13.5e-6, 33.1e-6);
-
-float escape(in vec3 p, in vec3 d, in float R, out vec2 t) {
-	vec3 v = p;
-	float b = dot(v, d);
-	float c = dot(v, v) - R*R;
-	float det2 = b * b - c;
-	if (det2 < 0.) return -1.;
-	float det = sqrt(det2);
-	float t1 = -b - det, t2 = -b + det;
-	t = vec2(t1, t2);
-	return (t1 >= 0.) ? t1 : t2;
-}
-
-vec3 AtmosphericScattering(in vec3 o, in vec3 wP, in vec3 sP, in float mu, in float g, in bool night){
-  vec3 cP = vec3(0.0, o.y + rE, 0.0);
-
-	#ifndef Void_Sky
-	if(wP.y < 0.0){
-		//return vec3(0.0);
-		//wP.y = 0.001 / (1.0 - wP.y);
-	}
-	#endif
-
-	//float g = 0.76;
-	//if(night) g = 0.96;
-	//g = -g;
-
-	float g2 = g*g;
-	//float mu = clamp01(dot(wP, sP));
-	float opmu2 = 1. + mu*mu;
-	float phaseR = .0596831 * opmu2;
-	float phaseM = (0.25 / Pi) * ((1.0 - g2) / pow(1.0 + g2 - 2.0 * g * mu, 1.5));
-
-	//if(night) phaseM *= 0.03;
-	//else phaseM *= 0.75;
-
-	//wP *= max(1.0, sqrt(wP.y * 2.0 * Pi));
-
-  int steps = int(AtmosphericScattering_Steps);
-  int stepss = int(AtmosphericScattering_Stepss);
-
-	float b = dot(cP, wP);
-	float c = dot(cP, cP) - rE*rE;
-	float det2 = b * b - c;
-
-	bool ground = false;
-
-	if(-b - sqrt(det2) > b && det2 > 0.0){
-		//return vec3(1.0, 0.0, 0.0);
-		//wP.y = length(wP.y) / sqrt(det2) * 2.0 * Pi;
-		wP.y = 0.0;
-		ground = true;
-		//wP.y = sqrt(wP.y * wP.y / det2);
-		//wP.y = abs(wP.y);
-	}
-
-	//vec2 t0;
-	//float L0 = escape(cP, wP, rA + 0.5, t0);
-
-	vec2 t;
-	float L = escape(cP, wP, rA, t);
-	//L = min(L, L0);
-
-	if(L > 0.0){
-  vec3 r = vec3(0.0);
-  vec3 m = vec3(0.0);
-
-  float opticalDepthR = 0.0;
-  float opticalDepthM = 0.0;
-
-	float len = L / 16.0;
-	vec3 direction = wP * len;
-	#if AtmosphericScattering_Steps < 8
-	vec3 position = cP;
-	#else
-	vec3 position = cP + direction * 0.5;
-	#endif
-
-	float scale = 16.0 / steps - 1.0;
-
-  for(int i = 0; i <= steps; i++){
-    float h = length(position) - rE;
-
-		if(ground){
-			h = 1000.0;
-		}
-
-    float hr = exp(-h / Hr) * len;
-    float hm = exp(-h / Hm) * len;
-
-    opticalDepthR += hr;
-    opticalDepthM += hm;
-
-    float opticalDepthLightR = 0.0;
-    float opticalDepthLightM = 0.0;
-
-		vec2 tL;
-		float Ls = escape(position, sP, rA, tL);
-
-		float len2 = (Ls) / 16.0;
-		vec3 direction2 = sP * len2;
-
-		#if AtmosphericScattering_Stepss < 8
-		vec3 position2 = position;
-		#else
-		vec3 position2 = position + direction2 * 0.5;
-		#endif
-
-		float scale2 = 16.0 / stepss - 1.0;
-
-    if(Ls > 0.0){
-      for(int j = 0; j <= stepss; j++){
-        float hL = length(position2) - rE;
-
-				if(ground){
-					hL = 1000.0;
-				}
-
-        opticalDepthLightR += exp(-hL / Hr) * len2;
-        opticalDepthLightM += exp(-hL / Hm) * len2;
-
-				position2 += direction2 * (1.0 + float(j) / steps * scale2);
-				//if(j == stepss - 1) position2 += direction2 * (15.0 - j);
-      }
-    }
-
-    vec3 tau = bR * (opticalDepthR + opticalDepthLightR) + 1.1 * bM * (opticalDepthM + opticalDepthLightM);
-    vec3 attenuation = exp(-tau);
-
-    r += attenuation * hr;
-    m += attenuation * hm;
-		position += direction * (1.0 + float(i) / steps * scale);
-		//if(i == steps - 1) position += direction * (15.0 - i);
-  }
-
-  return (r * bR * phaseR + m * bM * phaseM) * 20.0;
-  }
+*/
+float HG(in float m, in float g){
+  return (0.25 / Pi) * ((1.0 - g*g) / pow(1.0 + g*g - 2.0 * g * m, 1.5));
 }
 
 vec2 RaySphereIntersection(vec3 rayOrigin, vec3 rayDir, vec3 sphereCenter, float sphereRadius) {
@@ -163,15 +42,10 @@ vec2 RaySphereIntersection(vec3 rayOrigin, vec3 rayDir, vec3 sphereCenter, float
 	float c = dot(rayOrigin, rayOrigin) - (sphereRadius * sphereRadius);
 	float d = b * b - 4 * a * c;
 
-	if (d < 0)
-	{
-		return vec2(-1.0);
-	}
-	else
-	{
-		d = sqrt(d);
-		return vec2(-b - d, -b + d) / (2 * a);
-	}
+	if (d < 0) return vec2(-1.0);
+
+	d = sqrt(d);
+	return vec2(-b - d, -b + d) / (2 * a);
 }
 
 float density(in float l, in float h){
@@ -188,11 +62,27 @@ vec2 OpticalDepthRM(in float h, in float l, vec2 density){
 							exp(-h / density.y)) * l;
 }
 
-vec3 DrawSun(in vec3 m, in float mu, in float g){
-	float g2 = g*g;
-	float phase = (0.25 / Pi) * ((1.0 - g2) / pow(1.0 + g2 - 2.0 * g * mu, 1.5));
+vec3 DrawSunScattering(in vec3 m, in float mu, in float g){
+	float phase = HG(mu, g);
 
 	return m * phase * bM;
+}
+
+vec3 DrawSun(in vec3 L, in vec3 D, in vec3 E, float g, float density){
+	vec2 tracingSun = RaySphereIntersection(E, L, vec3(0.0), rA);
+	vec2 tracingPlanetA = RaySphereIntersection(E, D, vec3(0.0), rA);
+
+	float sA = max(0.0, -tracingPlanetA.x);
+	//if(bool(step(0.0, tL.x))) sA = min(sA, tL.x);
+
+	float s = tracingSun.y - max(0.0, tracingSun.x);
+	float h = max(1.0, length(E + D * sA) - rE);
+
+	vec3 tM = bM * exp(-h / Hm / density);
+	vec3 tR = bR * exp(-h / Hr / density);
+	vec3 tE = tR + tM;
+
+	return vec3(1.0) * saturate(exp(-tE * s)) * saturate(HG(dot(L, D), g));
 }
 
 //vec3 CalculateLocalScattering
@@ -208,86 +98,46 @@ void CalculateLocalInScattering(in float Dr, in float Dm, in float densityR, in 
 }
 
 vec3 CalculateInScattering(in vec3 e, in vec3 d, in vec3 l, in float g, ivec2 steps, in vec3 intensityRMS){
+	e.y *= Altitude_Scale;
 	e.y = max(e.y, 1.0);
 	e.y = e.y + rE;
-
+	
 	//float g = 0.76;
 	float g2 = g*g;
 
 	float mu = dot(d, l);
 	float opmu2 = 1. + mu*mu;
 
-	float phaseR = .0596831 * opmu2;
-	float phaseM = (0.25 / Pi) * ((1.0 - g2) / pow(1.0 + g2 - 2.0 * g * mu, 1.5));
+	float phaseR = (3.0 / 16.0 / Pi) * opmu2;
+	float phaseM = HG(mu, g);
 
-	vec2 tE = RaySphereIntersection(e, d, vec3(0.0), rE);
-	bool earth = bool(step(0.0, tE.x));
+	vec2 traceingEarth = RaySphereIntersection(vec3(0.0, e.y, 0.0), d, vec3(0.0), rE);
+	float isEarth = step(0.0, traceingEarth.x);
+	if(bool(isEarth)) {
+		e.y = min(rA, e.y);
+		traceingEarth = RaySphereIntersection(vec3(0.0, e.y, 0.0), d, vec3(0.0), rE);
+	}
 
 	vec2 t = RaySphereIntersection(e, d, vec3(0.0), rA);
 
-	if(earth) t.y = min(t.y, tE.x);
-
-	#if 0
-
-	vec2 invsteps = 1.0 / vec2(steps);
-
-	vec3 rayDirection = d * t.y;
-	vec3 rayStep = rayDirection * invsteps.x;
-	float stepSize = length(rayStep);
-
-	vec3 r = vec3(0.0);
-	vec3 m = vec3(0.0);
-
-	vec2 lastDensity = vec2(exp(-1.0 / Hr), exp(-1.0 / Hm));
-	vec3 lastLocalInScatteringR;
-	vec3 lastLocalInScatteringM;
-	Extinction(lastDensity, 1.0, 1.0, lastLocalInScatteringR, lastLocalInScatteringM);
-
-	vec2 particleDensity = vec2(0.0);
-
-	for(int i = 0; i < steps.x; ++i){
-		vec3 p = e + rayStep * float(i);
-
-		float h = max(0.0, length(p * vec3(0.0, 1.0, 0.0)) - rE);
-
-		vec2 atmosphereDensity = vec2(exp(-h / Hr), exp(-h / Hm));
-		particleDensity += (lastDensity + atmosphereDensity) * 0.5 * stepSize;
-		lastDensity = atmosphereDensity;
-
-		vec3 localInScatteringR;
-		vec3 localInScatteringM;
-		Extinction(lastDensity, particleDensity.x, particleDensity.y, localInScatteringR, localInScatteringM);
-
-		r += atmosphereDensity.x * (localInScatteringR + lastLocalInScatteringR) * 0.5 * stepSize;
-		m += atmosphereDensity.y * (localInScatteringM + lastLocalInScatteringM) * 0.5 * stepSize;
-	}
-
-	return r * phaseR + m * phaseM;
-
-	#else
-	if(t.x > t.y) t = vec2(t.y, t.x);
-
 	float tmin = max(0.0, t.x);
-	float tmax = t.y;
+	float tmax = bool(isEarth) ? traceingEarth.x : t.y;//mix(t.y, traceingEarth.x, isEarth);
 
-	float stepLength = (tmax) / float(steps.x);
-	//if(earth){
-	//	stepLength = max(0.0, tE.x) / float(steps.x);
-	//	tmin = stepLength * 0.5;
-	//}
+	float stepLength = (tmax - tmin); //if(t.x >= 0.0) stepLength = min(t.x, stepLength);
+		  stepLength /= float(steps);
+
+	//if(stepLength <= 0.0) return vec3(0.0);
 
 	vec3 rayStep = d * stepLength;
-	//e += d * (stepLength * 0.5 + tmin);
-	e += rayStep;
 
 	vec3 r = vec3(0.0);
-  vec3 m = vec3(0.0);
+  	vec3 m = vec3(0.0);
 
 	vec2 opticalDepth;
 
-	for(int i = 0; i < steps.x; i++){
+	for(int i = 1; i <= steps.x; i++){
 		vec3 p = e + rayStep * float(i);
-		float rayLength = max(0.0, length(p) - rE);
+		float rayLength = max(1.0, length(p) - rE);
 
 		float hr = exp(-rayLength / Hr);
 		float hm = exp(-rayLength / Hm);
@@ -299,20 +149,26 @@ vec3 CalculateInScattering(in vec3 e, in vec3 d, in vec3 l, in float g, ivec2 st
 
 		vec2 t = RaySphereIntersection(p, l, vec3(0.0), rA);
 
-		float stepLengthL = (t.y) / float(steps.y);
-		vec3 rayStepL = l * stepLengthL;
-		p += rayStepL;
+		//if(t.x <= 0.0){
+		float stepLengthL = (t.x > 0.0 ? t.x : t.y - max(0.0, t.x)) / float(steps.y);
+		//float stepLengthL = (t.y - max(0.0, t.x)) / float(steps.y);
+		//	  stepLengthL = t.x >= 0.0 ? min(stepLengthL, t.x / float(steps)) : stepLengthL;
 
-		for(int j = 0; j < steps.y; j++){
+		vec3 rayStepL = l * stepLengthL;
+		
+		for(int j = 1; j <= steps.y; j++){
 			vec3 pL = p + rayStepL * float(j);
 
-			float rayLengthL = max(0.0, length(pL) - rE);
+			float rayLengthL = max(1.0, length(pL) - rE);
 
 			opticalDepthLight += OpticalDepthRM(rayLengthL, stepLengthL);
-		}
+			//opticalDepthLight += vec2(exp(-rayLengthL / Hr), exp(-rayLengthL / Hm)) * stepLengthL;
+		}	
+		//}
+		//vec3 extinction = exp(-(bR * (opticalDepth.x + opticalDepthLight.x) + bM * (opticalDepth.y + opticalDepthLight.y)));
 
-		vec3 stepR;
-		vec3 stepM;
+		vec3 stepR = vec3(0.0);
+		vec3 stepM = vec3(0.0);
 		CalculateLocalInScattering(opticalDepth.x + opticalDepthLight.x, opticalDepth.y + opticalDepthLight.y, hr, hm, stepR, stepM);
 
 		r += (stepR) * stepLength;
@@ -321,12 +177,11 @@ vec3 CalculateInScattering(in vec3 e, in vec3 d, in vec3 l, in float g, ivec2 st
 
 	float Rintensity = intensityRMS.x;
 	float Mintensity = intensityRMS.y;
-	float SunIntensity = intensityRMS.z;
+	float SunIntensity = intensityRMS.z;	
 
-	vec3 sun = DrawSun(m, mu, 0.994) * step(tE.x, 0.0) * SunIntensity;
+	vec3 sun = DrawSunScattering(m, mu, 0.999) * (1.0 - isEarth);
 
-	return (r * bR * phaseR * Rintensity + m * bM * phaseM * Mintensity + sun);
-	#endif
+	return saturate(r * bR * phaseR * Rintensity + m * bM * phaseM * Mintensity + sun * SunIntensity) * 1.0;
 }
 
 vec3 Extinction(in float h, in float s){
@@ -344,8 +199,7 @@ vec3 Extinction(in vec3 e, in vec3 d){
 	e.y += rE;
 
 	vec2 tE = RaySphereIntersection(e, d, vec3(0.0), rE);
-	bool earth = bool(step(0.0, tE.x));
-	//if(earth) return vec3(0.0, 0.0, 0.0);
+	//if(bool(step(0.0, tE.x))) return vec3(0.0, 0.0, 0.0);
 
 	vec2 t = RaySphereIntersection(e, d, vec3(0.0), rA);
 
@@ -360,15 +214,37 @@ vec3 Extinction(in vec3 e, in vec3 d){
 	return Extinction(h, l);
 }
 
-vec3 ApplyEarthSurface(in vec3 color, in vec3 e, in vec3 d, in vec3 l){
+vec3 CalculateSimpleInScattering(in vec3 offset, in vec3 v, in vec3 l, in float g){
+	float mu = dot(v, l);
+
+	vec3 r = bR * (0.0596831) * (1.0 + mu*mu);
+	vec3 m = bM * HG(mu, g);
+
+	return Extinction(offset, l) * (r + m) / (bR + bM);
+}
+
+vec3 ApplyEarthSurface(in vec3 color, in vec3 e, in vec3 d, in vec3 l, vec3 lightColor, vec3 surfaceColor){
+	e.y *= Altitude_Scale;
 	e.y = max(e.y, 1.0);
 	e.y += rE;
 
-	vec2 t = RaySphereIntersection(e, d, vec3(0.0), rE);
-	float earth = step(0.0, t.x);
+	vec2 traceingEarth = RaySphereIntersection(e, d, vec3(0.0), rE);
+	//float isEarth = step(0.0, traceingEarth.x);
 
-	float tmax = max(t.x, t.y);
-	float tmin = max(min(t.x, t.y), 0.0);
+	if(traceingEarth.x < 0.0){
+		return color;
+	}
+
+	e.y = min(rA, e.y);
+
+	traceingEarth = RaySphereIntersection(e, d, vec3(0.0), rE);
+	vec2 traceingAtmospheric = RaySphereIntersection(e, d, vec3(0.0), rA);
+
+	float tmax = traceingEarth.x;
+	float tmin = max(traceingAtmospheric.x, 0.0);
+	float stepLength = tmax - tmin;
+
+	float H = max(1.0, length(e + d * stepLength) - rE);
 
 	float g = 0.76;
 	float g2 = g * g;
@@ -376,19 +252,23 @@ vec3 ApplyEarthSurface(in vec3 color, in vec3 e, in vec3 d, in vec3 l){
 	float mu = dot(d, l);
 	float opmu2 = 1. + mu*mu;
 
-	float phaseR = .0596831 * opmu2;
-	float phaseM = (0.25 / Pi) * ((1.0 - g2) / pow(1.0 + g2 - 2.0 * g * mu, 1.5));
+	float phaseR = (3.0 / 16.0 / Pi) * opmu2;
+	float phaseM = HG(mu, g);
 
 	vec3 earthSurfaceColor = vec3(0.0);
 
-	vec3 surfaceR = sunLightingColorRaw * (1.0 - exp(-tmin * bR * 10.0)) * phaseR;
-	vec3 surfaceM = sunLightingColorRaw * (1.0 - exp(-tmin * bM * 10.0)) * phaseM;
+	vec3 extinction = exp(-(bR * exp(-H / Hr) + bM * exp(-H / Hm)) * stepLength);
+	vec3 surfaceR = bR * extinction * stepLength * phaseR * lightColor;
+	vec3 surfaceM = bM * extinction * stepLength * phaseM * lightColor;
 
-	earthSurfaceColor = skyLightingColorRaw;
-	earthSurfaceColor *= Extinction(e.y - rE, tmin);
+	//vec3 surfaceR = lightColor * (1.0 - exp(-stepLength * bR * Extended_Earth_Surface_Atmospheric_Density * exp(-H / Hr))) * phaseR;
+	//vec3 surfaceM = lightColor * (1.0 - exp(-stepLength * bM * Extended_Earth_Surface_Atmospheric_Density * exp(-H / Hm))) * phaseM;
+
+	earthSurfaceColor = surfaceColor * mix(0.1, 1.0, fading);
 	earthSurfaceColor += surfaceR + surfaceM;
+	earthSurfaceColor *= Extinction(H, stepLength);
 
-	return color + earthSurfaceColor * earth;
+	return color + earthSurfaceColor * invPi * 0.5;
 }
 
 vec3 InScattering(in vec3 e, in vec3 d, in vec3 l, in float mu, in float g){
@@ -507,23 +387,18 @@ vec3 InScattering(in vec3 e, in vec3 d, in vec3 l, in float h, in float s, in fl
 	return (scattering);
 }
 
-vec3 CalculateSky(in vec3 viewVector, in vec3 lightVector, in float height, in float dither){
-	viewVector = mat3(gbufferModelViewInverse) * viewVector;
+vec3 SimpleLightColor(in vec3 L, vec3 D, vec3 E, float density, float mu, float g) {
+	E += vec3(0.0, rE, 0.0);
 
-	vec3 worldLightPosition = lightVector;
-	bool night = worldLightPosition.y < -0.1;
+	if(RaySphereIntersection(E, L, vec3(0.0), rE).x > 0.0) return vec3(0.0);
 
-	if(night) worldLightPosition = -worldLightPosition;
+    vec2 traceing = RaySphereIntersection(E, L, vec3(0.0), rA);
 
-	vec3 scattering = AtmosphericScattering(vec3(0.0, height - 63.0, 0.0), viewVector, worldLightPosition, -dot(viewVector, worldLightPosition), -0.76, night);
-	scattering = max(vec3(0.0), scattering) * 0.1;
+    float rayLength = traceing.x >= 0.0 ? min(traceing.y, traceing.x) : traceing.y;
+    float sunAltitude = max(1.0, length(E + L * rayLength) - rE);
 
-	if(night) scattering *= 0.04 * clamp01((worldLightPosition.y - 0.1) * 3.0);
-	vec3 nightSkyTransition = vec3(0.000167, 0.000277, 0.000413) * 0.3;
-			 nightSkyTransition += pow5(1.0 - clamp01(viewVector.y)) * vec3(1.049, 0.582, 0.095) * 0.0004;
-			 nightSkyTransition *= sqrt(clamp01(viewVector.y));
+    vec3 Tr = bR * exp(-sunAltitude / Hr * 0.5);
+    vec3 Tm = bM * exp(-sunAltitude / Hm * 0.5);
 
-	scattering += max(vec3(0.0), nightSkyTransition - dot03(scattering) * 1.1);
-
-	return L2Gamma(sqrt(scattering));
+    return max(vec3(0.0), exp(-(Tr + Tm) * rayLength * 0.5 * density)) * saturate(HG(mu, g));
 }

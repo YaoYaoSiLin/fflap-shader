@@ -1,22 +1,34 @@
 #version 130
-
-const int RGBA8   = 1;
-const int RGB16   = 2;
-const int RGBA16  = 2;
+/*
+const int RGB8     = 1;
+const int RGBA8    = 1;
+const int RGB16    = 2;
+const int RGBA16   = 2;
+const int RGBA16F  = 2;
+const int RGBA32F  = 3;
 const int RGBA32UI = 3;
 
 const int colortex0Format  = RGBA8;
 const int colortex1Format  = RGBA16;
 const int colortex2Format  = RGBA16;
 const int colortex3Format  = RGBA16;
-const int colortex4Format  = RGBA16;
-const int colortex5Format  = RGBA16;
-const int colortex6Format  = RGBA32UI;
+const int colortex4Format  = RGBA32F;
+const int colortex5Format  = RGBA16F;
+const int colortex6Format  = RGBA16;
 const int colortex7Format  = RGBA16;
+
+const int colortex8Format  = RGBA32F;
+const int colortex9Format  = RGB8;
+const int colortex10Format = RGBA16F;
+const int colortex11Format = RGBA8;
+const int colortex12Format = RGBA8;
+const int colortex13Format = RGBA8;
+const int colortex14Format = RGBA8;
+const int colortex15Format = RGBA16;
 
 const float sunPathRotation       = -35.0;    //[-35.0 -30.0 -25.0 -20.0 -15.0 -10.0 -5.0 0.0]
 const float ambientOcclusionLevel = 0.0;
-
+*/
 uniform mat4 gbufferProjectionInverse;
 
 in vec2 lmcoord;
@@ -49,5 +61,5 @@ void main() {
   gl_FragData[0] = color;
   gl_FragData[1] = vec4(0.0, 1.0, 0.0, 0.0);
   gl_FragData[2] = vec4(encodeNormal, mask, 1.0);
-  gl_FragData[3] = vec4(encodeNormal, 0.0, 1.0);
+  gl_FragData[3] = vec4(encodeNormal, 1.0, 0.0);
 }

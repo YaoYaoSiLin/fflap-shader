@@ -1,101 +1,98 @@
 #version 130
 
-#define Enabled_TAA
+#define GSH
 
-attribute vec4 at_tangent;
-attribute vec3 mc_Entity;
+#ifndef GSH
+    #define vertex_material_id material_id
+
+    #define vertex_texcoord texcoord
+    #define vertex_lmcoord lmcoord
+
+    #define vertex_normal normal
+    #define vertex_tangent tangent
+    #define vertex_binormal binormal
+
+    #define vertex_color color
+#endif
+
+in vec4 at_tangent;
+in vec3 at_midBlock;
+in vec3 mc_Entity;
+in vec2 mc_midTexCoord;
 
 uniform mat4 gbufferModelViewInverse;
 
-uniform vec3 sunPosition;
-uniform vec3 upPosition;
+out vec2 mid_coord;
 
-out float id;
+out float vertex_material_id;
 
-out vec2 texcoord;
-out vec2 lmcoord;
+out vec2 vertex_texcoord;
+out vec2 vertex_lmcoord;
 
-out vec3 normal;
-out vec3 binormal;
-out vec3 tangent;
-out vec3 vP;
+out vec3 vertex_normal;
+out vec3 vertex_tangent;
+out vec3 vertex_binormal;
 
-out float fading;
-out vec3 sunLightingColorRaw;
-out vec3 skyLightingColorRaw;
+out vec3 vertexWorldPosition;
 
-out vec4 biomesColor;
+out vec4 vertex_color;
 
-#define Gen_Water_Color
+#define Enabled_TAA
 
-uniform vec2 jitter;
-
-#include "../libs/common.inc"
-#include "../libs/biomes.glsl"
-#include "../libs/atmospheric.glsl"
-
-float CalculateSunLightFading(in vec3 wP, in vec3 sP){
-  float h = playerEyeLevel + defaultHightLevel;
-  return clamp01(dot(sP * defaultHightLevel, vec3(0.0, h, 0.0)) / (h * defaultHightLevel) * 10.0);
-}
+#include "/libs/common.inc"
+#include "/libs/materials/material_data.glsl"
 
 void main() {
-  id = 0.0;
+    mid_coord = mc_midTexCoord;
 
-  texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
-  lmcoord  = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
+    vertex_texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
+    vertex_lmcoord  = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
 
-  biomesColor = gl_Color;
+    vertex_material_id = 0.0;
 
-  id += CalculateMaskIDVert(8.0, mc_Entity.x)
-      + CalculateMaskIDVert(79.0, mc_Entity.x)
-      + CalculateMaskIDVert(90.0, mc_Entity.x)
-      + CalculateMaskIDVert(165.0, mc_Entity.x)
-      + CalculateMaskIDVert(20.0, mc_Entity.x)
-      + CalculateMaskIDVert(95.0, mc_Entity.x)
-      + CalculateMaskIDVert(106.0, mc_Entity.x)
-      + CalculateMaskIDVert(160.0, mc_Entity.x)
-      //+ CalculateMaskIDVert2(20.0, 95.0, mc_Entity.x)
-      //+ CalculateMaskIDVert2(106.0, 160.0, mc_Entity.x)
-      ;
+    vertex_color = gl_Color;
 
-  if(id == 8.0) {
-    //id = 8.0;
-    biomesColor.a = 0.05;
-    biomesColor = CalculateWaterColor(biomesColor);
-  }
+    vertex_normal = normalize(gl_NormalMatrix * gl_Normal);
+    vertex_tangent = normalize(gl_NormalMatrix * at_tangent.xyz);
+    vertex_binormal = cross(vertex_tangent, vertex_normal);
 
-  //if(mc_Entity.x == 165.0){
-  //  id = 7.0;
-  //}
+    gl_Position = gl_Vertex;
 
-  //if(mc_Entity.x == 20 || mc_Entity.x == 95) id = 20.0;
-  //if(mc_Entity.x == 79) id = 79.0;
-  //if(mc_Entity.x == 90) id = 90.0;
-  //if(mc_Entity.x == 106 || mc_Entity.x == 160) id = 106.0;
+    if(mc_Entity.x == 8) {
+        vertex_material_id = 8.0;
 
-  normal  = normalize(gl_NormalMatrix * gl_Normal);
-  tangent = normalize(gl_NormalMatrix * at_tangent.xyz);
-  binormal = cross(tangent, normal);
+        vertex_color.rgb = CalculateWaterColor(vertex_color).rgb;
+        vertex_color.a = 0.1;
+    } else 
+    if(mc_Entity.x == 79) {
+        vertex_material_id = 79.0;
+    } else 
+    if(mc_Entity.x == 90) {
+        vertex_material_id = 90.0;
+    }else 
+    if(mc_Entity.x == 165) {
+        vertex_material_id = 165.0;
+    }else 
+    if(mc_Entity.x == 20.0) {
+        vertex_material_id = 20.0;
+    }else 
+    if(mc_Entity.x == 95.0) {
+        vertex_material_id = 95.0;
+    }else
+    if(mc_Entity.x == 102) {
+        vertex_material_id = 102.0;
+    }else 
+    if(mc_Entity.x == 160) {
+        vertex_material_id = 160.0;
+    }
 
-  vec3 sP = mat3(gbufferModelViewInverse) * normalize(sunPosition);
+    gl_Position = gl_ModelViewMatrix * gl_Position;
 
-  vP = (gl_ModelViewMatrix * gl_Vertex).xyz;
-  vec3 wP = mat3(gbufferModelViewInverse) * vP;
+    vertexWorldPosition = mat3(gbufferModelViewInverse) * gl_Position.xyz;
 
-  fading = CalculateSunLightFading(normalize(wP.xyz), sP);
+    gl_Position = gl_ProjectionMatrix * gl_Position;
 
-  sunLightingColorRaw = (CalculateSky(normalize(sunPosition), sP, 0.0, 0.7));
-  skyLightingColorRaw = (CalculateSky(normalize(upPosition), sP, 0.0, 1.0));
-
-  gl_Position = gl_ModelViewMatrix * gl_Vertex;
-
-  //if(bool(step(dot(normalize(-vP), normal), 1e-5))) 
-  gl_Position.z += 0.05 * 0.05 * step(dot(normalize(-vP), normal), 1e-5);
-
-  gl_Position = gl_ProjectionMatrix * gl_Position;
-
-  #ifdef Enabled_TAA
+    #ifdef Enabled_TAA
     gl_Position.xy += jitter * 2.0 * gl_Position.w;
-  #endif
+    #endif
 }

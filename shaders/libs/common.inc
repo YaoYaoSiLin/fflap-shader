@@ -97,6 +97,13 @@ vec4 nvec4(vec3 pos) {
 #define sum3(x) dot(vec3(x), vec3(1.0/3.0))
 #define sum4(x) dot(vec4(x), vec4(0.25))
 
+/*
+#define pow2(x) (x*x)
+#define pow3(x) (x*pow2(x))
+#define pow4(x) (x*pow3(x))
+#define pow5(x) (x*pow4(x))
+*/
+
 float linearizeDepth(float depth) {
     return (2.0 * near) / (far + near - depth * (far - near));
 }
@@ -106,6 +113,10 @@ float linearizeDepth(float depth, in float zfar) {
 }
 
 float getLum(in vec3 color){
+  return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}
+
+float getluma(in vec3 color){
   return dot(color, vec3(0.2126, 0.7152, 0.0722));
 }
 
@@ -157,9 +168,23 @@ vec3 rescale(vec3 vmin, vec3 vmax, vec3 v){
   return saturate((v-vmin)/(vmax-vmin));
 }
 
+float remap(float v, float vmin, float vmax) {
+  return (v - vmin) / (vmax - vmin);
+}
+
+float remap(float value, float original_min, float original_max, float new_min, float new_max) {
+  return max(0.0, new_min + (((value - original_min) / (original_max - original_min)) * (new_max - new_min)));
+}
+
+float MaterialIDFloat(in float id, in float material){
+  return step(id - 0.5, material) * step(material, id + 0.5);
+}
+
 #define CalculateMaskID(id, x) bool(step(id - 0.5, x) * step(x, id + 0.5))
 #define CalculateMaskIDVert(id, E) (step(id - 0.5, E) * step(E, id + 0.5) * id)
 #define CalculateMaskIDVert2(id, id2, E) (step(id - 0.5, E) * step(E, id + 0.5) * id + step(id2 - 0.5, E) * step(E, id2 + 0.5) * id)
+
+#define MaterialsIDBetween(id, id2, E) bool(step(id - 0.5, E) * step(E, id2 + 0.5))
 
 /*----pack and unpack form zombye----*/
 
@@ -193,25 +218,6 @@ vec2 unpack2x4(in float x){
 
 /*-------end of pack and unpack------*/
 
-  float gaussianBlurWeights(in float offset){
-    float o = 0.83;
-
-    o *= o;
-    offset *= offset;
-
-    return (1/(sqrt(2*Pi*o)))*exp(-(offset)/(2*o));
-  }
-
-  float gaussianBlurWeights(in vec2 offset){
-    float o = 0.83;
-
-    o *= o;
-    offset *= offset;
-
-    return (1.0f/(2.0f*Pi*o))*exp(-((offset.x+offset.y)/(2.0f*o)));
-  }
-
-
 vec3 saturation(in vec3 color, in float s){
   float lum = dot03(color);
   return (lum + (color - lum) * s);
@@ -220,4 +226,39 @@ vec3 saturation(in vec3 color, in float s){
 vec2 RotateDirection(vec2 V, vec2 RotationCosSin) {
     return vec2(V.x*RotationCosSin.x - V.y*RotationCosSin.y,
                 V.x*RotationCosSin.y + V.y*RotationCosSin.x);
+}
+
+vec2 RotateDirection(vec2 V, float angle) {
+  vec2 RotationCosSin = vec2(cos(angle), sin(angle));
+
+  return vec2(V.x*RotationCosSin.x - V.y*RotationCosSin.y,
+              V.x*RotationCosSin.y + V.y*RotationCosSin.x);
+}
+
+vec4 textureGather(in sampler2D sampler, in vec2 coord, in vec2 pixelSize){
+  coord = round(coord / pixelSize);
+
+  return (  texture2D(sampler, (coord + vec2(1.0, 0.0)) * pixelSize)
+          + texture2D(sampler, (coord - vec2(1.0, 0.0)) * pixelSize)
+          + texture2D(sampler, (coord + vec2(0.0, 1.0)) * pixelSize)
+          + texture2D(sampler, (coord - vec2(0.0, 1.0)) * pixelSize)) * 0.25;
+}
+
+uniform vec2 jitter;
+
+vec2 add_jitter(in vec2 coord) {
+  return coord - jitter;
+}
+
+void AddJitter(inout vec2 coord) {
+  coord = add_jitter(coord);
+}
+
+vec4 add_jitter_vertex(in vec4 coord) {
+  coord.xy += jitter * 2.0 * coord.w;
+  return coord;
+}
+
+void AddJitterToVertex(inout vec4 coord) {
+  coord = add_jitter_vertex(coord);
 }

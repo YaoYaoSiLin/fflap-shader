@@ -23,7 +23,7 @@ in vec3 vP;
 
 in vec4 color;
 
-#include "../libs/common.inc"
+#include "/libs/common.inc"
 
 vec2 normalEncode(vec3 n) {
     vec2 enc = normalize(n.xy) * (sqrt(-n.z*0.5+0.5));
@@ -73,8 +73,8 @@ void main() {
   vec2 encodeNormal = normalEncode(particlesNormal);
 
   float lightmapPackge = pack2x8(lmcoord);
-  float emissive = max(floor(lmcoord.x * 15.0 - 14.0), speculars.b) * 0.06;
-  vec4 lightmap = vec4(lightmapPackge, 1.0, emissive, 1.0);
+  float emissive = max(floor(lmcoord.x * 15.0 - 14.0), speculars.b) * 254.0 / 255.0;
+  vec4 lightmap = vec4(lightmapPackge, 1.0, pack2x8(vec2(emissive, 1.0)), 1.0);
 
   float specularPackge = pack2x8(speculars.rg);
 

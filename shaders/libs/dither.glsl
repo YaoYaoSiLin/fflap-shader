@@ -29,8 +29,7 @@ float bayer_64x64(in vec2 a, vec2 r){
   return bayer64(a * r);
 }
 
-float hash(in vec2 p)  // replace this by something better
-{
+float hash(in vec2 p) { // replace this by something better
     p  = 50.0*fract( p*0.3183099 + vec2(0.71,0.113));
     return -1.0+2.0*fract( p.x*p.y*(p.x+p.y) );
 }
@@ -57,10 +56,28 @@ float R2sq(in vec2 coord){
   return t(mod(coord.x * a1 + coord.y * a2, 1));
 }
 
+uniform sampler2D depthtex2;
+
+const float blueNoiseTextureResolution = 64.0;
+/*
 float GetBlueNoise(in sampler2D tex, in vec2 uv, float uvScale, vec2 offset){
-  float noiseScale = 64.0;
-  uv = (uv) * vec2(aspectRatio, 1.0) * uvScale / noiseScale;
+  uv = uv * uvScale * vec2(aspectRatio, 1.0) / blueNoiseTextureResolution;
   uv -= offset * resolution;
+  uv = fract(uv);
 
   return texture(tex, uv).x;
+}
+*/
+float GetBlueNoise(in sampler2D tex, in vec2 uv, vec2 offset){
+  vec2 coord = floor(uv) / blueNoiseTextureResolution - offset * resolution;
+
+  return texture(tex, coord).x;
+}
+
+float GetBlueNoise(in sampler2D tex, in vec2 uv, vec2 resolution, vec2 offset){
+  return GetBlueNoise(tex, uv * resolution, offset);
+}
+
+float GetBlueNoise(in sampler2D tex, in vec2 uv, float scale, vec2 offset){
+  return GetBlueNoise(tex, uv * resolution, offset);
 }
